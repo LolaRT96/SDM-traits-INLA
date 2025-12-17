@@ -1,0 +1,335 @@
+# ==============================================================================
+# Title: Fit Spatial SDMs for Merluccius merluccius With and Without Trait (INLA + SPDE)
+# Author: M. Grazia Pennino
+# Date:   2025-07-08
+# Description:
+#   - Load prepared SDM data (haul-level mean_length_cm and FishBase max length)
+#   - Scale covariates and check for collinearity
+#   - Define two PC priors for the SPDE, select best by DIC
+#   - Fit four models:
+#       1) Spatial model without trait
+#       2) Spatial model with trait
+#       3) Non-spatial model without trait
+#       4) Non-spatial model with trait
+#   - Evaluate models using DIC, WAIC, and ROC/AUC
+#   - Plot mesh, spatial field, and ROC curves
+# ==============================================================================
+
+# --- 0. Load libraries ---------------------------------------------------------
+
+library(INLA)    # Bayesian spatial modeling
+library(sp)      # SpatialPointsDataFrame
+library(dplyr)   # Data wrangling
+library(fields)  # image.plot()
+library(viridis) # Color scales
+library(ggplot2) # Plotting
+library(pROC)    # ROC/AUC calculations
+library(mapdata)
+world <- map_data("world")
+class(world)
+
+dir.create("plots/empirical_hake", recursive = TRUE, showWarnings = FALSE)
+
+# --- 1. Load prepared SDM data ------------------------------------------------
+
+sdm_data <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluza.rds")
+
+# --- 2. Scale covariates and define variables --------------------------------
+
+df <- sdm_data %>%
+  mutate(
+    mean_len_s = as.numeric(scale(mean_length_cm)),        # observed mean haul length
+    Depth_s    = as.numeric(scale(Depth)),                  # bottom depth
+    BotTemp_s  = as.numeric(scale(BotTemp)),                # bottom temperature
+    BotSal_s   = as.numeric(scale(BotSal)),                 # bottom salinity
+    FB_len_s   = as.numeric(scale(FB_max_length_cm)),       # FishBase maximum length
+    year_f     = as.factor(Year)  # Ensure year is factor
+  )
+
+
+# --- 3. Check collinearity and select environmental covariates ---------------
+cov_env <- df %>% select(Depth_s, BotTemp_s, BotSal_s)
+cor_env <- cor(cov_env, use = "complete.obs")
+print(cor_env)
+
+high_corr <- which(abs(cor_env) > 0.7 & abs(cor_env) < 1, arr.ind = TRUE)
+if (nrow(high_corr) > 0) {
+  drop_var <- names(which.max(colMeans(abs(cor_env))))
+  message("Dropping environmental covariate due to high collinearity: ", drop_var)
+  env_vars <- setdiff(names(cov_env), drop_var)
+} else {
+  env_vars <- names(cov_env)
+}
+
+message("Using environmental covariates: ", paste(env_vars, collapse = ", "))
+
+# Define fixed effect sets
+fixed_no_trait  <- env_vars
+fixed_with_trait <- c(env_vars, "mean_len_s")
+
+# --- 4. Prepare spatial data ---------------------------------------------------
+
+coordinates(df) <- ~ShootLong + ShootLat
+proj4string(df) <- CRS("+proj=longlat +datum=WGS84")
+coords <- coordinates(df)
+
+# --- 5. Build triangulation mesh ------------------------------------------------
+
+mesh <- inla.mesh.2d(
+  loc      = coords,
+  max.edge = c(0.5, 2),
+  cutoff   = 0.1
+)
+
+plot(mesh); points(df, col = "red", pch = 16, cex = 0.5)
+
+# --- 6. Define PC priors for SPDE and select best ------------------------------
+
+spde_options <- list(
+  loose = inla.spde2.pcmatern(mesh, alpha = 2,
+                              prior.range = c(1, 0.01), prior.sigma = c(1, 0.01)),
+  tight = inla.spde2.pcmatern(mesh, alpha = 2,
+                              prior.range = c(0.5, 0.05), prior.sigma = c(0.5, 0.05))
+)
+
+
+fit_spatial <- function(spde_model, covariates) {
+  idx <- inla.spde.make.index("spatial.field", spde_model$n.spde)
+  A <- inla.spde.make.A(mesh, loc = coords)
+  df_cov <- df@data %>% 
+    mutate(year_f = as.factor(Year)) %>%
+    select(all_of(covariates), year_f)
+  stk <- inla.stack(
+    data = list(presence = df$presence),
+    A = list(A, 1),
+    effects = list(
+      spatial.field = idx,
+      data = df_cov
+    ),
+    tag = "est"
+  )
+  
+  formula <- as.formula(paste(
+    "presence ~", paste(c(covariates, "f(year_f, model = 'iid')"), collapse = " + "),
+    "+ f(spatial.field, model = spde_model)"
+  ))
+  
+  res <- inla(
+    formula,
+    family = "binomial",
+    data = inla.stack.data(stk),
+    control.predictor = list(A = inla.stack.A(stk), compute = TRUE),
+    control.compute = list(dic = TRUE, waic = TRUE)
+  )
+  
+  list(model = res, stack = stk)
+}
+
+
+results <- lapply(spde_options, fit_spatial, covariates = fixed_with_trait)
+
+
+# Compare DIC for priors
+for (nm in names(results)) {
+  m <- results[[nm]]$model
+  cat(sprintf("%-6s DIC = %8.2f, WAIC = %8.2f\n", nm, m$dic$dic, m$waic$waic))
+}
+
+best_prior <- names(results)[which.min(sapply(results, function(x) x$model$dic$dic))]
+message("Selected SPDE prior: ", best_prior)
+spatial_with_trait <- results[[best_prior]]$model
+stk_with_trait     <- results[[best_prior]]$stack
+
+# --- 7a. Fit spatial model WITHOUT trait --------------------------------------
+
+f_spatial_nt <- fit_spatial(spde_options[[best_prior]], fixed_no_trait)
+spatial_no_trait <- f_spatial_nt$model
+stk_no_trait     <- f_spatial_nt$stack
+
+# --- 7b. Fit non-spatial models -----------------------------------------------
+
+fmla_ns_base  <- as.formula(paste("presence ~", paste(fixed_no_trait, collapse = " + ")))
+fmla_ns_trait <- as.formula(paste("presence ~", paste(fixed_with_trait, collapse = " + ")))
+model_ns_base  <- inla(fmla_ns_base,  family = "binomial", data = df@data,
+                       control.compute = list(dic = TRUE, waic = TRUE))
+model_ns_trait <- inla(fmla_ns_trait, family = "binomial", data = df@data,
+                       control.compute = list(dic = TRUE, waic = TRUE))
+
+# --- 8. Compare model fits ----------------------------------------------------
+
+comparison <- tibble::tibble(
+  Model = c("Spatial_NoTrait", "Spatial_WithTrait", "NonSpatial_NoTrait", "NonSpatial_WithTrait"),
+  DIC   = c(spatial_no_trait$dic$dic, spatial_with_trait$dic$dic,
+            model_ns_base$dic$dic,      model_ns_trait$dic$dic),
+  WAIC  = c(spatial_no_trait$waic$waic, spatial_with_trait$waic$waic,
+            model_ns_base$waic$waic,      model_ns_trait$waic$waic)
+)
+print(comparison)
+
+# --- 9. Calculate and compare ROC/AUC -----------------------------------------
+
+# Extract fitted values
+preds <- df@data %>%
+  mutate(
+    pred_sp_nt    = spatial_no_trait$summary.fitted.values[ inla.stack.index(stk_no_trait,     "est")$data, "mean"],
+    pred_sp_trait = spatial_with_trait$summary.fitted.values[ inla.stack.index(stk_with_trait, "est")$data, "mean"],
+    pred_ns_nt    = model_ns_base$summary.fitted.values$mean,
+    pred_ns_trait = model_ns_trait$summary.fitted.values$mean
+  )
+roc_vals <- tibble::tibble(
+  Model = comparison$Model,
+  AUC   = c(
+    auc(roc(preds$presence, preds$pred_sp_nt)),
+    auc(roc(preds$presence, preds$pred_sp_trait)),
+    auc(roc(preds$presence, preds$pred_ns_nt)),
+    auc(roc(preds$presence, preds$pred_ns_trait))
+  )
+)
+print(roc_vals)
+
+
+# --- Plot combined spatial fields: F ------------------------------------
+
+
+sp_means_wt <- spatial_with_trait$summary.random$spatial.field$mean
+sp_means_nt <- spatial_no_trait$summary.random$spatial.field$mean
+
+projr    <- inla.mesh.projector(mesh, dims = c(200, 200))
+field_wt <- inla.mesh.project(projr, sp_means_wt)
+field_nt <- inla.mesh.project(projr, sp_means_nt)
+
+
+df_nt_merluccius <- expand.grid(
+  x = projr$x,
+  y = projr$y
+) %>%
+  mutate(value = as.vector(field_nt)) %>%
+  filter(!is.na(value))      # <- ELIMINA NAs
+
+df_wt_merluccius <- expand.grid(
+  x = projr$x,
+  y = projr$y
+) %>%
+  mutate(value = as.vector(field_wt)) %>%
+  filter(!is.na(value))      # <- ELIMINA NAs
+
+
+df_nt_crop_merl <- df_nt_merluccius |>
+  dplyr::filter(
+    between(x, -13.88, 1.35),
+    between(y, 39.36, 54.45)
+  )
+
+df_wt_crop_merl <- df_wt_merluccius |>
+  dplyr::filter(
+    between(x, -13.88, 1.35),
+    between(y, 39.36, 54.45)
+  )
+
+p_nt_merluccius <- ggplot(df_nt_crop_merl, aes(x, y, fill = value)) +
+  geom_raster() +
+  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
+  geom_text_contour(aes(z = value), size = 3, stroke = 0.15) +
+  scale_fill_distiller(palette = "RdBu", direction = -1) +
+  geom_map(data=world, map = world, aes(long, lat, map_id = region),
+           color = "black", fill = "black") + 
+  coord_fixed(xlim = c(-13.88, 1.35), ylim = c(40, 55)) +
+  theme_classic()
+
+p_wt_merluccius <-ggplot(df_wt_crop_merl, aes(x, y, fill = value)) +
+  geom_raster() +
+  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
+  geom_text_contour(aes(z = value), size = 3, stroke = 0.15) +
+  scale_fill_distiller(palette = "RdBu", direction = -1) +
+  geom_map(data=world, map = world, aes(long, lat, map_id = region),
+           color = "black", fill = "black") + 
+  coord_fixed(xlim = c(-13.88, 1.35), ylim = c(40, 55)) +
+  theme_classic()
+
+
+windows();(p_nt_merluccius | p_wt_merluccius)
+
+
+#No traits
+p_nt_merluccius <- ggplot(df_nt_merluccius, aes(x, y, fill = value)) +
+  geom_raster() +
+  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
+  geom_text_contour(
+    aes(z = value),
+    stroke = 0.15,
+    size = 3,
+    skip = 0      # <- etiqueta TODAS las líneas
+  ) +
+  scale_fill_distiller(
+    palette = "RdBu",
+    direction = -1,
+    name = "Mean"
+  ) +
+  labs(
+    title = "(a) Without trait",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_classic()
+
+#With trait
+p_wt_merluccius <- ggplot(df_wt_merluccius, aes(x, y, fill = value)) +
+  geom_raster() +
+  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
+  geom_text_contour(
+    aes(z = value),
+    stroke = 0.15,
+    size = 3,
+    skip = 0      # <- etiqueta TODAS las líneas
+  ) +
+  scale_fill_distiller(
+    palette = "RdBu",
+    direction = -1,
+    name = "Mean"
+  ) +
+  labs(
+    title = "(b) With trait",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_classic()
+
+windows();(p_nt_merluccius | p_wt_merluccius)
+
+# ROC comparison plot
+png("plots/empirical_hake/roc_comparison_merluza.png", width = 800, height = 600)
+plot(roc(preds$presence, preds$pred_sp_trait), col = "blue", lwd = 2, main = "ROC Comparison")
+lines(roc(preds$presence, preds$pred_sp_nt),    col = "green",  lwd = 2)
+lines(roc(preds$presence, preds$pred_ns_trait), col = "red",    lwd = 2)
+legend("bottomright",
+       legend = c("Spatial + Trait", "Spatial only", "Non-spatial + Trait"),
+       col    = c("blue", "green", "red"),
+       lwd    = 2)
+dev.off()
+
+message("✅ All models fitted, evaluated, and plotted successfully.")
+
+
+# 1. Collect your models in a named list
+models_merluccius <- list(
+  Spatial_NoTrait_merluccius      = spatial_no_trait,
+  Spatial_WithTrait_merluccius    = spatial_with_trait,
+  NonSpatial_NoTrait_merluccius   = model_ns_base,
+  NonSpatial_WithTrait_merluccius = model_ns_trait
+)
+
+saveRDS(
+  models_merluccius,
+  file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/output/models_SIMULATED.rds"
+)
+
+
+# 2. Loop over them and print summaries
+for (nm in names(models)) {
+  cat("========================================\n")
+  cat("Model:", nm, "\n")
+  cat("========================================\n\n")
+  print(summary(models[[nm]]))
+  cat("\n\n")
+}
+
