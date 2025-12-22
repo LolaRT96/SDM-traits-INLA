@@ -1,13 +1,13 @@
 # ==============================================================================
 # Title: Fit Spatial SDMs for Simulated Data With and Without Trait (INLA + SPDE)
-# Author: M. Grazia Pennino (adapted)
-# Date:   2025-07-14
+# Author: M. Grazia Pennino & Lola Riesgo 
+# Date:   2025-12-17
 # Description:
 #   - Simulate SDM-like data with trait and spatial coordinates
 #   - Scale covariates and check for collinearity
 #   - Define two PC priors for the SPDE, select best by DIC
 #   - Fit four models:
-#       1) Spatial model without trait
+#       1) Spatial model without trait 
 #       2) Spatial model with trait
 #       3) Non-spatial model without trait
 #       4) Non-spatial model with trait
@@ -27,79 +27,466 @@ library(pROC)    # ROC/AUC calculations
 library(tibble)
 library(patchwork)
 library(metR)
-
-dir.create("plots/simulated_single", recursive = TRUE, showWarnings = FALSE)
+library(withr)
+library(fmesher)
 
 # --- 1. Simulate SDM-like data ------------------------------------------------
 
+#Código de Maria 
+
+# df <- tibble::tibble(
+#   presence = rbinom(n, 1, 0.5),
+#   ShootLong = runif(n, -10, 10),
+#   ShootLat  = runif(n, 35, 45),
+#   Depth     = rnorm(n, 200, 50),
+#   BotTemp   = rnorm(n, 12, 2),
+#   BotSal    = rnorm(n, 35, 1),
+#   mean_length_cm     = rnorm(n, 25, 5),
+#   FB_max_length_cm   = rnorm(n, 50, 10),
+#   Year      = sample(2015:2022, n, replace = TRUE)
+# )
+
+#Mi propuesta 
+
 set.seed(123)
 
-n <- 1000
+n_time <- 7 #years 2015:2022 
 
-df <- tibble::tibble(
-  presence = rbinom(n, 1, 0.5),
-  ShootLong = runif(n, -10, 10),
-  ShootLat  = runif(n, 35, 45),
-  Depth     = rnorm(n, 200, 50),
-  BotTemp   = rnorm(n, 12, 2),
-  BotSal    = rnorm(n, 35, 1),
-  mean_length_cm     = rnorm(n, 25, 5),
-  FB_max_length_cm   = rnorm(n, 50, 10),
-  Year      = sample(2015:2022, n, replace = TRUE)
-)
+#Create the grid (latitude and longitude) from 0 to 100 
+#From the Trust-Your-Model script 
+
+campo <- function(c1, c2, c3, c4) {
+  xy <- expand.grid(
+    seq(c1, c2, length.out = 100),
+    seq(c3, c4, length.out = 100)
+  )
+  cbind(xy[, 1], xy[, 2])
+}
+
+c1 <- 0; c2 <- 100; c3 <- 0; c4 <- 100 
+
+loc_xy <- campo(c1, c2, c3, c4) 
+
+#Mesh
+
+with_seed(123, {mesh2d_sim <- 
+  fm_mesh_2d_inla(loc.domain = loc_xy, 
+                  max.edge = c(8, 15))  
+})
+
+windows();plot(mesh2d_sim, main = "Malla", asp = 1, lwd = 0.5)
+
+mesh2d_sim$n
+
+
+# Depth  ------------------------------------------------------------------
+
+grid_list <- vector("list", n_time)
+
+for (t in seq_len(n_time)) {
+  
+  loc_df <- data.frame(
+    x <- loc_xy[,1],
+    y <- loc_xy[,2]
+  )
+  
+  depth_range <- c(50, 200)
+  
+  loc_df$bathy <- depth_range[1] +
+    ((loc_df$y - c3) / (c4 - c3)) * diff(depth_range)
+  
+  grid_list[[t]] <- data_frame (
+    x =loc_df$x,
+    y= loc_df$y,
+    bathy = loc_df$bathy,
+    time = t )
+}
+
+grid_bathy_df <- bind_rows(grid_list)
+head(grid_bathy_df)
+
+p_bathy <- ggplot(grid_bathy_df, aes(x =x, y = y, fill = bathy)) +
+  geom_tile() +
+  coord_equal() +
+  scale_fill_viridis_c(option = "G", direction =-1)+
+  labs(
+    x = "x",
+    y = "y",
+    fill = "Bathymetry (m)"  # ← aquí cambias el nombre de la leyenda
+  ) +
+  scale_x_continuous(expand = c(0, 0)) +  
+  scale_y_continuous(expand = c(0, 0)) + 
+  theme_classic() +
+  theme( 
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    legend.position   = "right",
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid        = element_blank(),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  )
+
+p_bathy
+
+
+# Bottom temperature ---------------------------------------------------------
+
+# Anomalías temporales suaves
+anomalies <- cumsum(rnorm(n_time, mean = 0, sd = 0.2))
+
+# Función que convierte profundidad en temperatura
+temp_from_depth <- function(depth) {
+  17 - (depth - 50) * (12 / 150)
+}
+
+grid_temp_list <- vector("list", n_time)
+
+for (t in seq_len(n_time)) {
+  
+  loc_df <- grid_bathy_df %>% filter(time == t)
+  
+  anomaly_t <- anomalies[t]
+  
+  # Temperatura final
+  loc_df$temp <- temp_from_depth(loc_df$bathy) + 
+    anomaly_t + 
+    rnorm(nrow(loc_df), mean = 0, sd = 0.3)  # ruido espacial pequeño
+  
+  grid_temp_list[[t]] <- loc_df
+}
+
+grid_temp_df <- bind_rows(grid_temp_list)
+
+ggplot(grid_temp_df, aes(x = x, y = y, fill = temp)) +
+  geom_tile() +
+  facet_wrap(~time, ncol = 4) +
+  coord_equal() +
+  scale_fill_viridis_c(option = "H") +
+  labs(x = "x", y = "y", fill = "Temp (°C)")
+
+
+# Bottom salinity ---------------------------------------------------------
+
+sal_from_temp <- function(temp) {
+  # Relación lineal aproximada: aguas frías (~5°C) = 35 PSU, aguas templadas (~17°C) = 34 PSU
+  35 - (temp - 5) * (2 / 12)
+}
+
+grid_sal_list <- vector("list", n_time)
+
+for (t in seq_len(n_time)) {
+  
+  loc_df <- grid_temp_df %>% filter(time == t)
+  
+  # Salinidad base a partir de temperatura
+  loc_df$sal <- sal_from_temp(loc_df$temp) +
+    rnorm(nrow(loc_df), mean = 0, sd = 0.1)  # pequeño ruido espacial
+  
+  grid_sal_list[[t]] <- loc_df
+}
+
+grid_sal_df <- bind_rows(grid_sal_list)
+
+# Visualización de salinidad
+ggplot(grid_sal_df, aes(x = x, y = y, fill = sal)) +
+  geom_tile() +
+  facet_wrap(~time, ncol = 4) +
+  coord_equal() +
+  scale_fill_viridis_c(option = "C") +
+  labs(x = "x", y = "y", fill = "Salinity (PSU)")
+
+
+# Spatio temporal structure (Gaussian Random Field)  ----------------------------------------------
+
+with_seed(123, {
+  
+  #Precision
+  prec <- 1 / 4
+  rho <- 25
+  sigma <- sqrt(7)
+  phi <- 0.8
+  
+  sigma_eps <- sigma * sqrt(1 - phi^2) #Noise deviation: each time unit we add noise of a specific amplitude. 
+  
+  u0_nodes <- fmesher::fm_matern_sample(mesh2d_sim, n = 1, rho = rho, sigma = sigma) #Guassian Random Field
+  
+  u0_nodes <- u0_nodes - mean(u0_nodes) #center at zero to eliminate unwanted deviations from the field. 
+  
+  n_time <- 7 
+  A_grid <- fm_basis(mesh2d_sim, loc_xy) #matrix that associates each node of the mesh with each point of the grid
+  
+  latent_list <-  vector("list", n_time)
+  
+  u_prev <- u0_nodes #node starting point
+  
+  for(t in seq(n_time)) {
+    
+    eps_t <-  fm_matern_sample(mesh2d_sim, n=1, rho = rho, sigma = sigma) #noise
+    eps_t <- eps_t - mean(eps_t) #mean to zero
+    
+    u_t <- phi * u_prev + eps_t
+    u_prev <- u_t #result at the nodes for time t
+    
+    latent_t <- drop(A_grid %*% u_t) #we interpolate those values u_t at each grid point 
+    
+    latent_list[[t]] <- data_frame(
+      x =loc_xy[,1],
+      y=loc_xy[,2],
+      latent = latent_t,
+      time = t
+    )
+    
+  }
+  
+  latent_time_df <- bind_rows(latent_list)
+  
+} )
+
+ggplot(latent_time_df, aes(x=x, y=y, fill=latent)) +
+  geom_tile()+
+  facet_wrap(~time,  nrow = 3) +
+  coord_equal()+
+  scale_fill_viridis_c() +
+  labs(
+    x = "x",
+    y = "y",
+    fill = "Spatial structure"  
+  ) +
+  scale_x_continuous(expand = c(0, 0)) +  
+  scale_y_continuous(expand = c(0, 0)) + 
+  theme_classic() +
+  theme( axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+         legend.position   = "bottom",
+         axis.line         = element_line(color = "black", linewidth = 0.4),
+         axis.ticks        = element_line(color = "black", linewidth = 0.3),
+         panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+         panel.grid        = element_blank(),
+         strip.background  = element_blank(),                        
+         strip.text        = element_text(face = "bold", size = 12)  
+  )
+
+
+# Area occupied -----------------------------------------------
+#Body size is going to regulate the environmental answer to depth to temperature 
+#Small body: warm waters 
+#Large body: depth water/cold waters 
+
+df_grid <- grid_temp_df %>%
+  select(x, y, time, temp) %>%           # temp SOLO aquí
+  inner_join(
+    latent_time_df %>% select(x, y, time, latent),
+    by = c("x","y","time")
+  ) %>%
+  inner_join(
+    grid_bathy_df %>% select(x, y, time, bathy),
+    by = c("x","y","time")
+  ) %>%
+  inner_join(
+    grid_sal_df %>% select(x, y, time, sal),
+    by = c("x","y","time")
+  )
+
+glimpse(df_grid)
+
+
+
+n_time <- 7
+
+# pesos ambientales
+beta_latent <- 4.5
+beta_temp   <- 2.2
+beta_sal    <- 1.0
+beta_bathy  <- 0.05
+
+# thermal niche 
+beta_size        <- 0.6
+beta_temp_size   <- -0.08   
+beta_bathy_size <-  0.03    
+
+# ocupación
+frac_ocup_media <- 0.45
+sd_frac_ocup    <- 0.03
+
+df_list <- vector("list", n_time)
+
+with_seed(123, {
+  
+  for (t in seq_len(n_time)) {
+    
+    grid_t <- df_grid %>% filter(time == t)
+    
+    frac_ocup_t <- min(
+      max(rnorm(1, frac_ocup_media, sd_frac_ocup), 0.15),
+      0.40
+    )
+    
+    # gradiente ontogénico espacial (latente)
+    grid_t <- grid_t %>%
+      mutate(
+        size_latent = scale(bathy)[,1] - scale(temp)[,1]
+      )
+    
+    # score ecológico
+    grid_t <- grid_t %>%
+      mutate(
+        score = beta_latent * latent +
+          beta_temp   * temp +
+          beta_sal    * sal +
+          beta_bathy  * bathy +
+          beta_size        * size_latent +
+          beta_temp_size   * size_latent * temp +
+          beta_bathy_size  * size_latent * bathy
+      )
+    
+    # umbral para fijar ocupación
+    umbral <- quantile(grid_t$score, probs = 1 - frac_ocup_t)
+    
+    grid_t <- grid_t %>%
+      mutate(pres = ifelse(score > umbral, 1, 0))
+    
+    df_list[[t]] <- grid_t
+  }
+})
+
+df_ocup <- bind_rows(df_list)
+
+
+# Sampling (n=1000) -------------------------------------------------------
+
+n_pts <- 1000
+target_ratio_bounds <- c(0.4, 0.5)
+
+ratio_vec <- runif(n_time,
+                   target_ratio_bounds[1],
+                   target_ratio_bounds[2])
+
+df_muestreo_list <- vector("list", n_time)
+
+with_seed(456, {
+  
+  for (t in seq_len(n_time)) {
+    
+    grid_t <- df_ocup %>% filter(time == t)
+    
+    pres_t <- grid_t %>% filter(pres == 1)
+    abs_t  <- grid_t %>% filter(pres == 0)
+    
+    ratio_t <- ratio_vec[t]
+    
+    n_abs  <- floor(n_pts / (1 + ratio_t))
+    n_pres <- n_pts - n_abs
+    
+    n_abs  <- min(n_abs,  nrow(abs_t))
+    n_pres <- min(n_pres, nrow(pres_t))
+    
+    muestra_t <- bind_rows(
+      sample_n(abs_t,  n_abs),
+      sample_n(pres_t, n_pres)
+    )
+    
+    df_muestreo_list[[t]] <- muestra_t
+  }
+})
+
+df_muestra <- bind_rows(df_muestreo_list)
+
+#Body size vary with temp and depth
+#NOTE: Here, temp has 12 times more effect over the length than the cov depth
+
+df_muestra <- df_muestra %>%
+  mutate(
+    mu_length =
+      35 +
+      0.05 * bathy -      
+      0.6  * temp,        
+    length_cm = rnorm(n(), mean = mu_length, sd = 4)
+  )
+
+#Body size VS depth 
+
+ggplot(df_muestra, aes(bathy, length_cm)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess") +
+  labs(x = "Depth (m)", y = "Body length (cm)")
+
+#Body size VS temp 
+
+ggplot(df_muestra, aes(temp, length_cm)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess") +
+  labs(x = "Bottom temperature (°C)", y = "Body length (cm)")
+
+#area ocupada
+ggplot(df_ocup, aes(x = x, y = y, fill = factor(pres))) +
+  geom_tile(color = NA) +
+  coord_equal() +
+  scale_fill_manual(values = c("0" = "grey90", "1" = "deepskyblue"),
+                    labels = c("Absence", "Presence")) +
+  facet_wrap(~ time, ncol = 3) +
+  labs(
+    x = "x", 
+    y = "y") +
+  scale_x_continuous(expand = c(0, 0)) +  
+  scale_y_continuous(expand = c(0, 0)) + 
+  theme_classic() +
+  theme( axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+         legend.position   = "bottom",
+         axis.line         = element_line(color = "black", linewidth = 0.4),
+         axis.ticks        = element_line(color = "black", linewidth = 0.3),
+         panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+         panel.grid        = element_blank(),
+         strip.background  = element_blank(),                       
+         strip.text        = element_text(face = "bold", size = 12)  
+  )
+
+
+##TWO DATAFRAMES READY
+
+#df_muestra = df_fit #for fitting 
+#df_ocup = df_predict #for predict 
 
 # --- 2. Scale covariates and define variables --------------------------------
 
-df <- df %>%
+df <- df_muestra  %>%
   mutate(
-    mean_len_s = as.numeric(scale(mean_length_cm)),
-    Depth_s    = as.numeric(scale(Depth)),
-    BotTemp_s  = as.numeric(scale(BotTemp)),
-    BotSal_s   = as.numeric(scale(BotSal)),
-    FB_len_s   = as.numeric(scale(FB_max_length_cm)),
-    year_f     = as.factor(Year)
+    length_cm_s = as.numeric(scale(length_cm)),
+    bathy_s    = as.numeric(scale(bathy)),
+    temp_s  = as.numeric(scale(temp)),
+    sal_s   = as.numeric(scale(sal)),
+    time_f     = as.factor(time)
   )
 
 # --- 3. Check collinearity and select environmental covariates ---------------
 
-cov_env <- df %>% select(Depth_s, BotTemp_s, BotSal_s)
+cov_env <- df %>% select(bathy_s, temp_s, sal_s)
 
 cor_env <- cor(cov_env, use = "complete.obs")
 
 print(cor_env)
 
 high_corr <- which(abs(cor_env) > 0.7 & abs(cor_env) < 1, arr.ind = TRUE)
+#temperatura y salinidad estan correlacionadas 
+#nos quedamos con la salinidad 
 
-if (nrow(high_corr) > 0) {
-  drop_var <- names(which.max(colMeans(abs(cor_env))))
-  message("Dropping environmental covariate due to high collinearity: ", drop_var)
-  env_vars <- setdiff(names(cov_env), drop_var)
-} else {
-  env_vars <- names(cov_env)
-}
-message("Using environmental covariates: ", paste(env_vars, collapse = ", "))
-
-fixed_no_trait  <- env_vars #Solo las variables ambientales
-fixed_with_trait <- c(env_vars, "mean_len_s") #variables ambientales + el trait 
+env_vars <- df %>% select(bathy_s, temp_s)
+fixed_no_trait  <- c("bathy_s", "temp_s")
+fixed_with_trait <- c("bathy_s", "temp_s", "length_cm_s")
 
 
 # --- 4. Prepare spatial data ---------------------------------------------------
 
-
-
-coordinates(df) <- ~ShootLong + ShootLat
-proj4string(df) <- CRS("+proj=longlat +datum=WGS84")
-coords <- coordinates(df)
-
-
+loc <- data.frame(x = df$x, y = df$y)
+coordinates(loc) <- ~ x + y
+coords <- coordinates(loc)
 
 # --- 5. Build triangulation mesh ------------------------------------------------
 
-mesh <- inla.mesh.2d(
-  loc      = coords,
-  max.edge = c(0.5, 2),
-  cutoff   = 0.1
-)
+mesh <- fm_mesh_2d_inla(loc.domain = loc, 
+                max.edge = c(7, 13),
+                cutoff = 0.1)  
+mesh$n
 
 plot(mesh); points(df, col = "red", pch = 16, cex = 0.5)
 
@@ -113,17 +500,18 @@ spde_options <- list(
                               prior.range = c(0.5, 0.05), prior.sigma = c(0.5, 0.05))
 )
 
+
 fit_spatial <- function(spde_model, covariates) {
   
   idx <- inla.spde.make.index("spatial.field", spde_model$n.spde)
-  A <- inla.spde.make.A(mesh, loc = coords)
+  A <- inla.spde.make.A(mesh, loc)
   
-  df_cov <- df@data %>% 
-    mutate(year_f = as.factor(Year)) %>%
-    select(all_of(covariates), year_f)
+  df_cov <- df %>% 
+    mutate(time_f = as.factor(time)) %>%
+    select(all_of(covariates), time_f)
   
   stk <- inla.stack(
-    data = list(presence = df$presence),
+    data = list(presence = df$pres),
     A = list(A, 1),
     effects = list(
       spatial.field = idx,
@@ -133,7 +521,7 @@ fit_spatial <- function(spde_model, covariates) {
   )
   
   formula <- as.formula(paste(
-    "presence ~", paste(c(covariates, "f(year_f, model = 'iid')"), collapse = " + "),
+    "presence ~", paste(c(covariates, "f(time_f, model = 'iid')"), collapse = " + "),
     "+ f(spatial.field, model = spde_model)"
   ))
   
@@ -149,7 +537,6 @@ fit_spatial <- function(spde_model, covariates) {
 }
 
 results <- lapply(spde_options, fit_spatial, covariates = fixed_with_trait)
-
 
 for (nm in names(results)) {
   m <- results[[nm]]$model
@@ -167,27 +554,102 @@ stk_with_trait     <- results[[best_prior]]$stack #extrae la fomula del mejor st
 ##Priors seleccionados: LOOSE
 ##prior.range = c(1, 0.01), prior.sigma = c(1, 0.01)
 
-# --- 7a. Fit spatial model WITHOUT trait --------------------------------------
+# --- 7a. SPATIAL WITHOUT TRAITS --------------------------------------
 
-#La funcion predefinida anteriormente es: fit_espacial(spde_model, covariates)
+#To have a better control of predictors its better to write all functions 
+#Define spde
+spde <- inla.spde2.pcmatern(mesh, prior.range = c(1, 0.01), prior.sigma = c(1, 0.01))
+s.index <- inla.spde.make.index(name = "spatial.field", n.spde = spde$n.spde)
 
-f_spatial_nt <- fit_spatial(spde_options[[best_prior]], fixed_no_trait)
+#Define A
+A <- inla.spde.make.A(mesh, loc)
 
-spatial_no_trait <- f_spatial_nt$model
+#Define stack
+stack.1 <- inla.stack(
+  data   = list(y = df$pres),
+  A      = list(A, 1),
+  effects = list(
+    s.index,  
+    df %>% transmute(
+      intercept = 1,
+      temp_s, time, bathy_s, length_cm_s
+    )
+  ),
+  tag = "fit"
+)
 
-stk_no_trait     <- f_spatial_nt$stack
+#Define formula: individuals are goint to response different regarding their length
+#effect of temperature depends on the length
+#size deendend on temp 
 
-# --- 7b. Fit non-spatial models -----------------------------------------------
+f.1 <- y ~ -1 +intercept + bathy_s + temp_s + f(spatial.field, model = spde)
 
-fmla_ns_base  <- as.formula(paste("presence ~", paste(fixed_no_trait, collapse = " + ")))
+#Model spatial NO traits 
 
-fmla_ns_trait <- as.formula(paste("presence ~", paste(fixed_with_trait, collapse = " + ")))
+spatial_no_trait <- inla(
+  f.1,
+  data              = inla.stack.data(stack.1),
+  family            = "binomial",
+  control.predictor = list(
+    A       = inla.stack.A(stack.1),
+    compute = TRUE
+  ),
+  control.compute   = list(dic = TRUE, waic = TRUE, cpo = TRUE),
+  verbose           = TRUE
+)
 
-model_ns_base  <- inla(fmla_ns_base,  family = "binomial", data = df@data,
-                       control.compute = list(dic = TRUE, waic = TRUE))
+# --- 7b. SPATIAL WITH TRAITS --------------------------------------
 
-model_ns_trait <- inla(fmla_ns_trait, family = "binomial", data = df@data,
-                       control.compute = list(dic = TRUE, waic = TRUE))
+f.2 <- y ~ -1 + intercept + bathy_s + temp_s + length_cm_s +
+  temp_s:length_cm_s + f(spatial.field, model = spde)
+
+#Model spatial WITH traits
+
+spatial_with_trait <- inla(
+  f.2,
+  data              = inla.stack.data(stack.1),
+  family            = "binomial",
+  control.predictor = list(
+    A       = inla.stack.A(stack.1),
+    compute = TRUE
+  ),
+  control.compute   = list(dic = TRUE, waic = TRUE, cpo = TRUE),
+  verbose           = TRUE
+)
+
+# --- 7c. NO SPATIAL WITH TRAITS --------------------------------------
+
+f.3 <- y ~ -1 + intercept + bathy_s + temp_s + length_cm_s +
+  temp_s:length_cm_s 
+
+model_ns_trait <- inla(
+  f.3,
+  data              = inla.stack.data(stack.1),
+  family            = "binomial",
+  control.predictor = list(
+    A       = inla.stack.A(stack.1),
+    compute = TRUE
+  ),
+  control.compute   = list(dic = TRUE, waic = TRUE, cpo = TRUE),
+  verbose           = TRUE
+)
+
+
+# --- 7c. NO SPATIAL NO TRAITS --------------------------------------
+
+f.4 <- y ~ -1 + intercept + bathy_s + temp_s 
+
+model_ns_base <- inla(
+  f.4,
+  data              = inla.stack.data(stack.1),
+  family            = "binomial",
+  control.predictor = list(
+    A       = inla.stack.A(stack.1),
+    compute = TRUE
+  ),
+  control.compute   = list(dic = TRUE, waic = TRUE, cpo = TRUE),
+  verbose           = TRUE
+)
 
 # --- 8. Compare model fits ----------------------------------------------------
 
@@ -202,20 +664,28 @@ print(comparison)
 
 # --- 9. Calculate and compare ROC/AUC -----------------------------------------
 
-preds <- df@data %>%
+idx <- inla.stack.index(stack.1, "fit")$data
+
+pred_ns_nt <- model_ns_base$summary.fitted.values[idx, "mean"]
+pred_ns_tr <- model_ns_trait$summary.fitted.values[idx, "mean"]
+pred_sp_nt <- spatial_no_trait$summary.fitted.values[idx, "mean"]
+pred_sp_tr <- spatial_with_trait$summary.fitted.values[idx, "mean"]
+
+preds <- df %>%
   mutate(
-    pred_sp_nt    = spatial_no_trait$summary.fitted.values[ inla.stack.index(stk_no_trait,     "est")$data, "mean"],
-    pred_sp_trait = spatial_with_trait$summary.fitted.values[ inla.stack.index(stk_with_trait, "est")$data, "mean"],
-    pred_ns_nt    = model_ns_base$summary.fitted.values$mean,
-    pred_ns_trait = model_ns_trait$summary.fitted.values$mean
+    pred_ns_nt = pred_ns_nt,
+    pred_ns_tr = pred_ns_tr,
+    pred_sp_nt = pred_sp_nt,
+    pred_sp_tr = pred_sp_tr
   )
+
 roc_vals <- tibble::tibble(
   Model = comparison$Model,
   AUC   = c(
-    auc(roc(preds$presence, preds$pred_sp_nt)),
-    auc(roc(preds$presence, preds$pred_sp_trait)),
-    auc(roc(preds$presence, preds$pred_ns_nt)),
-    auc(roc(preds$presence, preds$pred_ns_trait))
+    auc(roc(preds$pres, preds$pred_sp_nt)),
+    auc(roc(preds$pres, preds$pred_sp_tr)),
+    auc(roc(preds$pres, preds$pred_ns_nt)),
+    auc(roc(preds$pres, preds$pred_ns_tr))
   )
 )
 
@@ -226,28 +696,20 @@ print(roc_vals)
 sp_means_wt <- spatial_with_trait$summary.random$spatial.field$mean
 sp_means_nt <- spatial_no_trait$summary.random$spatial.field$mean
 
-projr       <- inla.mesh.projector(mesh, dims = c(200, 200))
-field_wt    <- inla.mesh.project(projr, sp_means_wt)
-field_nt    <- inla.mesh.project(projr, sp_means_nt)
+projr <- fmesher::fm_evaluator(
+  mesh = mesh,
+  dims = c(200, 200)
+)
 
-# Save combined figure with two panels
-png("plots/simulated_single/spatial_fields_combined.png", width = 1200, height = 600)
-par(mfrow = c(1, 2), mar = c(4, 4, 3, 5))  # Adjust margins
+field_wt <- fmesher::fm_evaluate(
+  projector = projr,
+  field     = sp_means_wt
+)
 
-# Panel (a): Without trait
-image.plot(projr$x, projr$y, field_nt, col = viridis(100),
-           xlab = "Longitude", ylab = "Latitude", asp = 1,
-           main = "(a) ")
-contour(projr$x, projr$y, field_nt, add = TRUE, col = "black", lwd = 0.4)
-
-# Panel (b): With trait
-image.plot(projr$x, projr$y, field_wt, col = viridis(100),
-           xlab = "Longitude", ylab = "Latitude", asp = 1,
-           main = "(b) ")
-contour(projr$x, projr$y, field_wt, add = TRUE, col = "black", lwd = 0.4)
-
-
-###MEJOR USA GGPLOT 
+field_nt    <- fmesher::fm_evaluate(
+  projector = projr,
+  field     = sp_means_nt
+)
 
 df_nt <- expand.grid(
   x = projr$x,
@@ -263,108 +725,25 @@ df_wt <- expand.grid(
   mutate(value = as.vector(field_wt)) %>%
   filter(!is.na(value))      # <- ELIMINA NAs
 
-df_nt_crop <- df_nt |>
-  dplyr::filter(
-    between(x, -15, 15),
-    between(y, 30, 50)
-  )
-
-df_wt_crop <- df_wt |>
-  dplyr::filter(
-    between(x, -15, 15),
-    between(y, 30, 50)
-  )
-
-p_nt <-ggplot(df_nt_crop, aes(x, y, fill = value)) +
+p_nt <-ggplot(df_nt, aes(x, y, fill = value)) +
   geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  geom_text_contour(aes(z = value), size = 3, stroke = 0.15) +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
   coord_equal(expand = FALSE) +
   theme_classic()
 
-p_wt <-ggplot(df_wt_crop, aes(x, y, fill = value)) +
+p_wt <-ggplot(df_wt, aes(x, y, fill = value)) +
   geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  geom_text_contour(aes(z = value), size = 3, stroke = 0.15) +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
   coord_equal(expand = FALSE) +
   theme_classic()
-
-# p_wt <- ggplot(df_wt, aes(x, y, fill = value)) +
-#   geom_raster() +
-#   geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-#   geom_text_contour(
-#     aes(z = value),
-#     stroke = 0.15,
-#     size = 3,
-#     skip = 0      # <- etiqueta TODAS las líneas
-#   ) +
-#   scale_fill_distiller(
-#     palette = "RdBu",
-#     direction = -1,
-#     name = "Mean"
-#   ) +
-# coord_cartesian(
-#   xlim = c(-14.64, 14.64),
-#   ylim = c(30.37, 49.66)
-# ) +
-#   labs(
-#     title = "(b) With trait",
-#     x = "Longitude",
-#     y = "Latitude"
-#   ) +
-#   theme_classic()
-
-# #No traits
-# p_nt <- ggplot(df_nt, aes(x, y, fill = value)) +
-#   geom_raster() +
-#   geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-#   geom_text_contour(
-#     aes(z = value),
-#     stroke = 0.15,
-#     size = 3,
-#     skip = 0      # <- etiqueta TODAS las líneas
-#   ) +
-#   scale_fill_distiller(
-#     palette = "RdBu",
-#     direction = -1,
-#     name = "Mean"
-#   ) +
-#   coord_cartesian(
-#     xlim = c(-15, 15),
-#     ylim = c(30, 50)
-#   ) +
-#   labs(
-#     title = "(a) Without trait",
-#     x = "Longitude",
-#     y = "Latitude"
-#   ) +
-#   theme_classic()
 
 windows();(p_nt | p_wt)
-
-#OBSERVANDO LOS PATRONES DE VARIACIÓN:
 
 # El campo espacial positivo indica zonas donde la probabilidad predicha es mayor 
 # de lo que explican las covariables; negativo indica zonas donde es menor. 
 # Son efectos residuales suavizados del proceso espacial.
-# 
 
-
-
-# # ROC comparison plot
-# # png("plots/simulated_single/roc_comparison_simulated.png", width = 800, height = 600)
-# plot(roc(preds$presence, preds$pred_sp_trait), col = "blue", lwd = 2, main = "ROC Comparison")
-# lines(roc(preds$presence, preds$pred_sp_nt),    col = "green",  lwd = 2)
-# lines(roc(preds$presence, preds$pred_ns_trait), col = "red",    lwd = 2)
-# legend("bottomright",
-#        legend = c("Spatial + Trait", "Spatial only", "Non-spatial + Trait"),
-#        col    = c("blue", "green", "red"),
-#        lwd    = 2)
-# 
-
-# 11. Print model summaries
+# 11. Save the models
 
 models_SIMULATED <- list(
   Spatial_NoTrait_SIMULATED      = spatial_no_trait,
@@ -378,12 +757,3 @@ saveRDS(
   file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/output/models_SIMULATED.rds"
 )
 
-for (nm in names(models)) {
-  cat("========================================\n")
-  cat("Model:", nm, "\n")
-  cat("========================================\n\n")
-  print(summary(models[[nm]]))
-  cat("\n\n")
-}
-
-message("✅ All simulated models fitted, evaluated, and plotted successfully.")
