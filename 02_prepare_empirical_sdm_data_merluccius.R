@@ -43,7 +43,6 @@ mean_length_df <- ca_all %>%
 
 # --- 3. Build full haul list & assign 0/1 -------------------------------------
 
-
 all_hauls <- hh_all %>%
   distinct(Year, Survey, StNo, HaulNo)
 
