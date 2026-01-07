@@ -1,7 +1,6 @@
 # ==============================================================================
 # Title: Fit Spatial SDMs for Merluccius merluccius With and Without Trait (INLA + SPDE)
-# Author: M. Grazia Pennino
-# Date:   2025-07-08
+# Author: M. Grazia Pennino (MODIFIED BY LOLA RIESGO)
 # Description:
 #   - Load prepared SDM data (haul-level mean_length_cm and FishBase max length)
 #   - Scale covariates and check for collinearity
@@ -12,7 +11,8 @@
 #       3) Non-spatial model without trait
 #       4) Non-spatial model with trait
 #   - Evaluate models using DIC, WAIC, and ROC/AUC
-#   - Plot mesh, spatial field, and ROC curves
+#   - Plot spatial field
+#   - Model evaluation of the best model (spatial with trait)
 # ==============================================================================
 
 # --- 0. Load libraries ---------------------------------------------------------
@@ -38,6 +38,7 @@ library(patchwork)
 # --- 1. Load prepared SDM data ------------------------------------------------
 
 sdm_data <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluza.rds")
+summary(sdm_data)
 
 # --- 2. Scale covariates and define variables --------------------------------
 
@@ -51,6 +52,24 @@ df <- sdm_data %>%
     year_f     = as.factor(Year)  # Ensure year is factor
   )
 
+summary(sdm_data)
+
+summary(df) 
+
+ggplot(df, aes(x= year_f, y = mean_length_cm))+
+  geom_boxplot()+
+  theme_minimal()
+##Hay varios errores en la base de dato, por ejemplo la maxima longitud registrada son 990 cm (?????, una merluza de casi 10 metros?)
+##Hay muchos NAs en la longitud media ( NA's   :1799  )
+#la salinidad también esta mal, hay valores negativos 
+##Limpiar la base
+
+vars_to_scale <- c("mean_len_s", "Depth_s", "BotTemp_s", "BotSal_s")
+
+df_1 <- df %>%
+  filter(if_all(all_of(vars_to_scale), ~ . >= -3.3 & . <= 3.3))
+
+summary(df_1)
 
 # --- 3. Check collinearity and select environmental covariates ---------------
 
@@ -213,9 +232,10 @@ spatial_field <- result$summary.random$field
 # --- 5. Build triangulation mesh 
 # --- 5.2 Build triangulation mesh 
 
-coordinates(df) <- ~ShootLong + ShootLat
-proj4string(df) <- CRS("+proj=longlat +datum=WGS84")
-coords <- coordinates(df)
+df_1 <- df
+coordinates(df_1) <- ~ShootLong + ShootLat
+proj4string(df_1) <- CRS("+proj=longlat +datum=WGS84")
+coords <- coordinates(df_1)
 
 mesh <- inla.mesh.2d(
   loc      = coords,
@@ -223,7 +243,7 @@ mesh <- inla.mesh.2d(
   cutoff   = 0.1
 )
 
-plot(mesh); points(df, col = "red", pch = 16, cex = 0.5)
+plot(mesh); points(df_1, col = "red", pch = 16, cex = 0.5)
 
 mesh$n
 
@@ -290,6 +310,8 @@ stk_with_trait     <- results[[best_prior]]$stack
 
 # --- 7a. Fit spatial model WITH trait --------------------------------------
 
+df_1 <- as.data.frame(df_1)
+
 spde <- inla.spde2.pcmatern(mesh, alpha = 2,
                     prior.range = c(0.5, 0.05), prior.sigma = c(0.5, 0.05))
 
@@ -300,11 +322,11 @@ A <- inla.spde.make.A(mesh, coords)
 
 #Define stack
 stack.1 <- inla.stack(
-  data   = list(y = df$pres),
+  data   = list(y = df_1$pres),
   A      = list(A, 1),
   effects = list(
     s.index,  
-    df %>% transmute(
+    df_1 %>% transmute(
       intercept = 1,
       Depth_s, BotTemp_s, mean_len_s, year_f
     )
@@ -397,6 +419,7 @@ comparison <- tibble::tibble(
   WAIC  = c(spatial_without_trait$waic$waic, spatial_with_trait$waic$waic,
             model_ns_bas$waic$waic,      model_ns_trait$waic$waic)
 )
+
 print(comparison)
 
 # --- 9. Calculate and compare ROC/AUC -----------------------------------------
@@ -466,9 +489,7 @@ df_wt_crop_merl <- df_wt_merluccius |>
   )
 
 p_nt_merluccius <- ggplot(df_nt_crop_merl, aes(x, y, fill = value)) +
-  geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  geom_text_contour(aes(z = value), size = 3, stroke = 0.15) +
+   geom_tile() +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "black", fill = "black") + 
@@ -476,50 +497,14 @@ p_nt_merluccius <- ggplot(df_nt_crop_merl, aes(x, y, fill = value)) +
   theme_classic()
 
 p_wt_merluccius <-ggplot(df_wt_crop_merl, aes(x, y, fill = value)) +
-  geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  geom_text_contour(aes(z = value), size = 3, stroke = 0.15) +
+  geom_tile() +
+  # geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "black", fill = "black") + 
   coord_fixed(xlim = c(-13.88, 1.35), ylim = c(40, 55)) +
   theme_classic()
 
-
-windows();(p_nt_merluccius | p_wt_merluccius)
-
-
-#No traits
-p_nt_merluccius <- ggplot(df_nt_merluccius, aes(x, y, fill = value)) +
-  geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  scale_fill_distiller(
-    palette = "RdBu",
-    direction = -1,
-    name = "Mean"
-  ) +
-  labs(
-    title = "(a) Without trait",
-    x = "Longitude",
-    y = "Latitude"
-  ) +
-  theme_classic()
-
-#With trait
-p_wt_merluccius <- ggplot(df_wt_merluccius, aes(x, y, fill = value)) +
-  geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  scale_fill_distiller(
-    palette = "RdBu",
-    direction = -1,
-    name = "Mean"
-  ) +
-  labs(
-    title = "(b) With trait",
-    x = "Longitude",
-    y = "Latitude"
-  ) +
-  theme_classic()
 
 windows();(p_nt_merluccius | p_wt_merluccius)
 
@@ -536,3 +521,61 @@ saveRDS(
   file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/output/models_SIMULATED.rds"
 )
 
+
+
+# EXPLORACIÓN DEL MEJOR MODELO  -------------------------------------------
+
+#Relación de la temperatura y la longitud media 
+
+spatial_with_trait$summary.fixed
+
+temp_seq <- seq(min(df_1$BotTemp_s), max(df_1$BotTemp_s), length.out = 50)
+length_seq <- seq(
+  min(df_1$mean_len_s, na.rm = TRUE),
+  max(df_1$mean_len_s, na.rm = TRUE),
+  length.out = 50
+)
+
+grid <- expand.grid(BotTemp_s = temp_seq, mean_len_s = length_seq)
+grid$intercept <- 1
+grid$Depth_s <- mean(df_1$Depth_s)   # fijar otras variables en su media
+
+X <- model.matrix(~ -1 + intercept +Depth_s + BotTemp_s + mean_len_s + BotTemp_s:mean_len_s, data = grid)
+beta <- spatial_with_trait$summary.fixed$mean
+grid$eta <- as.vector(X %*% beta)
+grid$prob <- 1 / (1 + exp(-grid$eta))  # probabilidad binomial
+
+ggplot(grid, aes(x = BotTemp_s, y = mean_len_s, fill = prob)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "magma") +
+  labs(x = "Temperature (scaled)", y = "Length (scaled)", fill = "Prob of presence") +
+  theme_minimal()
+
+#Distribución de las marginales 
+
+marginals_fixed <- spatial_with_trait$marginals.fixed
+
+marginals_df <- lapply(names(marginals_fixed), function(param) {
+  df <- as.data.frame(marginals_fixed[[param]])
+  colnames(df) <- c("x", "y")
+  df$parameter <- param
+  df
+})
+
+marginals_combined <- bind_rows(marginals_df)
+
+# Paso 2: graficar con facets y escalas libres
+ggplot(marginals_combined, aes(x = x, y = y)) +
+  geom_line(color = "steelblue", size = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "darkred") +
+  facet_wrap(~ parameter, scales = "free_y", ncol = 3) +
+  theme_minimal(base_size = 13) +
+  labs(
+    title = "Distribuciones Marginales de los Efectos Fijos",
+    x = "Valor del coeficiente",
+    y = "Densidad"
+  ) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )

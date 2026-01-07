@@ -1,7 +1,6 @@
 # ==============================================================================
 # Title: Fit Spatial SDMs for Simulated Data With and Without Trait (INLA + SPDE)
-# Author: M. Grazia Pennino & Lola Riesgo 
-# Date:   2025-12-17
+# Author: M. Grazia Pennino MODIFIED BY LOLA RIESGO)
 # Description:
 #   - Simulate SDM-like data with trait and spatial coordinates
 #   - Scale covariates and check for collinearity
@@ -12,7 +11,8 @@
 #       3) Non-spatial model without trait
 #       4) Non-spatial model with trait
 #   - Evaluate models using DIC, WAIC, and ROC/AUC
-#   - Plot mesh, spatial field, and ROC curves
+#   - Plot spatial field
+#   - Model evaluation of the best model (spatial with trait)
 # ==============================================================================
 
 # --- 0. Load libraries ---------------------------------------------------------
@@ -161,7 +161,7 @@ grid_temp_df <- bind_rows(grid_temp_list)
 
 ggplot(grid_temp_df, aes(x = x, y = y, fill = temp)) +
   geom_tile() +
-  facet_wrap(~time, ncol = 4) +
+  facet_wrap(~time, ncol = 3) +
   coord_equal() +
   scale_fill_viridis_c(option = "H") +
   labs(x = "x", y = "y", fill = "Temp (°C)")
@@ -192,7 +192,7 @@ grid_sal_df <- bind_rows(grid_sal_list)
 # Visualización de salinidad
 ggplot(grid_sal_df, aes(x = x, y = y, fill = sal)) +
   geom_tile() +
-  facet_wrap(~time, ncol = 4) +
+  facet_wrap(~time, ncol = 3) +
   coord_equal() +
   scale_fill_viridis_c(option = "C") +
   labs(x = "x", y = "y", fill = "Salinity (PSU)")
@@ -582,7 +582,9 @@ stack.1 <- inla.stack(
 #effect of temperature depends on the length
 #size deendend on temp 
 
-f.1 <- y ~ -1 +intercept + bathy_s + temp_s + f(spatial.field, model = spde)
+f.1 <- y ~ -1 +intercept + bathy_s + temp_s + 
+       f(spatial.field, model = spde) +
+       f(time, model = 'iid') 
 
 #Model spatial NO traits 
 
@@ -601,7 +603,8 @@ spatial_no_trait <- inla(
 # --- 7b. SPATIAL WITH TRAITS --------------------------------------
 
 f.2 <- y ~ -1 + intercept + bathy_s + temp_s + length_cm_s +
-  temp_s:length_cm_s + f(spatial.field, model = spde)
+  temp_s:length_cm_s + f(spatial.field, model = spde) +
+  f(time, model = 'iid') 
 
 #Model spatial WITH traits
 
@@ -660,6 +663,7 @@ comparison <- tibble::tibble(
   WAIC  = c(spatial_no_trait$waic$waic, spatial_with_trait$waic$waic,
             model_ns_base$waic$waic,      model_ns_trait$waic$waic)
 )
+
 print(comparison)
 
 # --- 9. Calculate and compare ROC/AUC -----------------------------------------
@@ -728,6 +732,7 @@ df_wt <- expand.grid(
 p_nt <-ggplot(df_nt, aes(x, y, fill = value)) +
   geom_raster() +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
+  xlim(0,100) + ylim(0,100)+
   coord_equal(expand = FALSE) +
   theme_classic()
 
@@ -735,6 +740,7 @@ p_wt <-ggplot(df_wt, aes(x, y, fill = value)) +
   geom_raster() +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
   coord_equal(expand = FALSE) +
+  xlim(0,100) + ylim(0,100)+
   theme_classic()
 
 windows();(p_nt | p_wt)
@@ -756,4 +762,59 @@ saveRDS(
   models_SIMULATED,
   file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/output/models_SIMULATED.rds"
 )
+
+##Exploracion de la interaccion temperatra 
+spatial_with_trait$summary.fixed
+spatial_no_trait$summary.fixed
+
+# Crear grid de valores de temp y length
+temp_seq <- seq(min(df$temp_s), max(df$temp_s), length.out = 50)
+length_seq <- seq(min(df$length_cm_s), max(df$length_cm_s), length.out = 50)
+
+grid <- expand.grid(temp_s = temp_seq, length_cm_s = length_seq)
+grid$intercept <- 1
+grid$bathy_s <- mean(df$bathy_s)   # fijar otras variables en su media
+grid$time <- mean(df$time)
+
+X <- model.matrix(~ -1 + intercept + bathy_s + temp_s + length_cm_s + temp_s:length_cm_s, data = grid)
+beta <- spatial_with_trait$summary.fixed$mean
+grid$eta <- as.vector(X %*% beta)
+grid$prob <- 1 / (1 + exp(-grid$eta))  # probabilidad binomial
+
+ggplot(grid, aes(x = temp_s, y = length_cm_s, fill = prob)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "magma") +
+  labs(x = "Temperature (scaled)", y = "Length (scaled)", fill = "Prob of presence") +
+  theme_minimal()
+
+
+df$temp_s <- (df$temp - mean(df$temp)) / sd(df$temp)
+df$length_cm_s <- (df$length_cm - mean(df$length_cm)) / sd(df$length_cm)
+mean_temp <- mean(df$temp)
+sd_temp   <- sd(df$temp)
+mean_length <- mean(df$length_cm)
+sd_length   <- sd(df$length_cm)
+temp_orig_seq <- seq(min(df$temp), max(df$temp), length.out = 50)
+length_orig_seq <- seq(min(df$length_cm), max(df$length_cm), length.out = 50)
+grid_orig <- expand.grid(
+   temp = temp_orig_seq,
+   length_cm = length_orig_seq)
+grid_orig$temp_s <- (grid_orig$temp - mean_temp) / sd_temp
+grid_orig$length_cm_s <- (grid_orig$length_cm - mean_length) / sd_length
+grid_orig$intercept <- 1
+grid_orig$bathy_s <- mean(df$bathy_s)  
+grid_orig$time <- mean(df$time)
+X <- model.matrix(~ -1 + intercept + bathy_s + temp_s + length_cm_s + temp_s:length_cm_s, data = grid_orig)
+beta <- spatial_with_trait$summary.fixed$mean
+grid_orig$eta <- as.vector(X %*% beta)
+grid_orig$prob <- 1 / (1 + exp(-grid_orig$eta))
+ggplot(grid_orig, aes(x = temp, y = length_cm, fill = prob)) +
+ geom_tile() +
+ scale_fill_viridis_c(option = "magma") +
+ labs(x = "Bottom Temperature (°C)", y = "Length (cm)", fill = "Prob of presence") +
+ theme_minimal()
+
+
+
+
 
