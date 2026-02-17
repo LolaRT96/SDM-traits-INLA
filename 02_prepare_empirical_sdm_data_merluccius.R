@@ -20,8 +20,10 @@ hh_all <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProje
 ca_all <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/ca_all.rds")    # all catch records
 
 # --- 2. Identify Merluccius merluccius records --------------------------------
-# Use SpecCode = 126484 for M. merluccius
-target_spec <- 126484
+# Use c = 126484 for M. merluccius
+# target_spec <- 126484
+target_spec <- 126439 #micromessistius poutaasou
+
 
 # presence_df: one row per haul where merluccius was caught
 presence_df <- ca_all %>%
@@ -32,11 +34,12 @@ presence_df <- ca_all %>%
 # --- 2.5. Compute haul‐level mean length from CA -------------------------------
 
 # CA has columns LngtClass (length bin, cm) and CANoAtLngt (# fish at that length)
+
 mean_length_df <- ca_all %>%
   filter(SpecCode == target_spec, !is.na(LngtClass), CANoAtLngt > 0) %>%
   group_by(Year, Survey, StNo, HaulNo) %>%
   summarise(
-    mean_length_cm = sum(LngtClass * CANoAtLngt, na.rm = TRUE) /
+    mean_length_mm = sum(LngtClass * CANoAtLngt, na.rm = TRUE) /
       sum(CANoAtLngt, na.rm = TRUE),
     .groups = "drop"
   )
@@ -62,14 +65,35 @@ covars <- hh_all %>%
          BotSal) %>%       # bottom salinity
   distinct()
 
+# Definimos las columnas clave
+key_cols <- c("Year", "Survey", "StNo", "HaulNo")
+
 sdm_data <- sdm_base %>%
-  left_join(covars,       by = c("Year","Survey","StNo","HaulNo")) %>%
-  left_join(mean_length_df, by = c("Year","Survey","StNo","HaulNo")) %>%
-  filter(!is.na(Depth))   # drop any hauls lacking core covariates
+  # Antes del join convertimos solo las columnas clave
+  left_join(
+    covars %>% mutate(
+      Year = as.integer(Year),
+      across(c("Survey","StNo","HaulNo"), as.character)
+    ),
+    by = key_cols
+  ) %>%
+  left_join(
+    mean_length_df %>% mutate(
+      Year = as.integer(Year),
+      across(c("Survey","StNo","HaulNo"), as.character)
+    ),
+    by = key_cols
+  ) %>%
+  filter(!is.na(Depth))
+
+# sdm_data <- sdm_base %>%
+#   left_join(covars,       by = c("Year","Survey","StNo","HaulNo")) %>%
+#   left_join(mean_length_df, by = c("Year","Survey","StNo","HaulNo")) %>%
+#   filter(!is.na(Depth))   # drop any hauls lacking core covariates
 
 # --- 5. Add FishBase functional traits ----------------------------------------
 
-fb_traits <- species("Merluccius merluccius",
+fb_traits <- species("Micromessitius poutassou",
                      fields = c("Species", "Length", "Weight",
                                 "LongevityWild", "Vulnerability",
                                 "DepthRangeShallow", "DepthRangeDeep",
@@ -90,7 +114,7 @@ sdm_data <- sdm_data %>%
 #       `FB_max_length_cm` is the species‐level trait from FishBase.
 
 # --- 6. Save final dataset ----------------------------------------------------
-saveRDS(sdm_data, file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluza.rds")
+saveRDS(sdm_data, file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_micpot.rds")
 
 # --- 7. Quick summary ----------------------------------------------------------
 message("Final SDM dataset for M. merluccius:")

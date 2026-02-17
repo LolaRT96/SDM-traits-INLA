@@ -1,3 +1,4 @@
+
 # ==============================================================================
 # Title: Fit Spatial SDMs for Multispecies Assemblage With and Without Trait (INLA + SPDE)
 # Author: M. Grazia Pennino
@@ -15,6 +16,7 @@
 
 
 # --- 1. Load libraries --------------------------------------------------------
+
 library(dplyr)
 library(ggrepel)
 library(tidyr)
@@ -24,9 +26,10 @@ library(viridis)
 library(pROC)
 library(sp)
 
-dir.create("plots/empirical_multi", recursive = TRUE, showWarnings = FALSE)
+#dir.create("plots/empirical_multi", recursive = TRUE, showWarnings = FALSE)
 
 # --- 2. Load cleaned SDM dataset ----------------------------------------------
+
 sdm_data_multi <-  readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_multispecies_clean.rds")
 
 # --- 3. Apply data quality filters --------------------------------------------
@@ -37,6 +40,7 @@ sdm_data_multi <-  readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_
 
 # 3.1. Remove implausible or extreme individual sizes (trait) 
 #     - Values above 600 mm are rare and may distort trait scaling.
+
 sdm_data_multi <- sdm_data_multi %>%
   filter(mean_length < 600)
 
@@ -66,6 +70,41 @@ sdm_data_multi <- sdm_data_multi %>%
 
 # Summary of cleaned data
 summary(sdm_data_multi)
+
+## 3.5. We do not want every species, select the important
+
+levels(sdm_data_multi$Species)
+
+# sdm_data_multi <- sdm_data_multi %>%
+#   filter(Species %in% c("Lepidorhombus whiffiagonis", "Micromesistius poutassou", 
+#                         "Trachurus trachurus", "Scomber scombrus",  "Micromesistius poutassou", 
+#                         "Lepidorhombus boscii"))
+
+# plot histogram of sizes (cm)
+
+ggplot(data = sdm_data_multi, aes(x=mean_length)) +
+  geom_histogram( binwidth=15, fill="#69b3a2", color="#e9ecef", alpha=0.9) +
+  theme_classic() +
+  facet_wrap(~Species)+
+  theme(
+    plot.title = element_text(size=15)
+  )
+
+ggplot(sdm_data_multi, aes(x=Depth, y = mean_length))+
+  geom_point(aes(color = BotTemp)) +
+  scale_fill_distiller(palette = "YlGnBu", direction = 1) +
+  theme_classic() +
+  facet_wrap(~Species) 
+
+media_por_especie <- sdm_data_multi %>%
+  group_by(Species) %>%
+  summarise(
+    mean_length = mean(mean_length, na.rm = TRUE),
+    mean_BotTem = mean(BotTemp, na.rm = TRUE),
+    n           = n()
+  )
+
+media_por_especie
 
 
 # --- 3. Create SPDE mesh and model --------------------------------------------
@@ -145,8 +184,37 @@ stack <- inla.stack(
 #permite que algunas especies reaccionen más fuerte a la temperatura y otras menos
 #no se impone la misma pendiente a todas 
 
+# formula_trait <- presence ~ BotTemp_s + Depth_s + mean_length_s +
+#   f(Species, model = "iid") +
+#   f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
+#     BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
+#     model = "iid", #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
+#     group = temp_slope_id, #la variable aleatoria se replica por grupo, cada especie tiene su propia pendiente
+#     control.group = list(model = "iid")) + #la interpretación entre grupos se modela
+#   f(Year, model = "iid") +
+#   f(spatial, model = spde)
+
+
+
 formula_trait <- presence ~ BotTemp_s + Depth_s + mean_length_s +
   f(Species, model = "iid") +
+  f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
+    BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
+    model = "iid") + #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
+  f(Year, model = "iid") +
+  f(spatial, model = spde)
+
+##TRADUCCION ECOLÓGICA: Cada especie tiene su propia respuesta a la temperatura de fondo 
+#Respondemos a las preguntas de: cómo cambia la prob de presencia de cada especie con la temp de fondo
+#todas reaccionan igual a la temperatura o algunas son más sensibles?
+#qué especies aumentan o disminuyen su presencia con respecto a la temp?
+#OJO!!!! ATENCION 
+
+#al añadir mean_length, estamos tratando de entender si influye la longitud media de los 
+#individuos en la probabilidad de presencia de la especie, de manera INDEPENDIENTE al efecto ambiental 
+
+formula_trait_alternativa <- presence ~ BotTemp_s * mean_length_s + Depth_s + mean_length_s +
+  f(Species, model = "iid")  +
   f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
     BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
     model = "iid", #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
@@ -168,9 +236,7 @@ formula_trait_alternativa <- presence ~ BotTemp_s * mean_length_s + Depth_s + me
   f(Species, model = "iid")  +
   f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
     BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
-    model = "iid", #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
-    group = temp_slope_id, #la variable aleatoria se replica por grupo, cada especie tiene su propia pendiente
-    control.group = list(model = "iid")) + #la interpretación entre grupos se modela
+    model = "iid") + #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
   f(Year, model = "iid") +
   f(spatial, model = spde)
 
@@ -345,32 +411,6 @@ spatialfield_lola2  <- ggplot(df_traitlola2_multiReal, aes(x, y, fill = value)) 
 windows();(spatialfield_nt | spatialfield_maria1 | spatialfield_lola2)
 
 windows();(spatialfield_nt | spatialfield_maria1 )
-
-
-# --- 10. Plot ROC comparison ---------------------------------------------------
-png("plots/empirical_multi/roc_comparison_multispecies.png", width = 800, height = 600)
-plot(roc_trait, col = "blue", lwd = 2, main = "ROC Comparison: Trait vs No Trait")
-lines(roc_nt, col = "green", lwd = 2)
-legend("bottomright",
-       legend = c("With Trait", "No Trait"),
-       col = c("blue", "green"),
-       lwd = 2)
-dev.off()
-
-# --- 12. Print model summaries -------------------------------------------------
-
-models <- list(
-  Spatial_NoTrait    = model_nt,
-  Spatial_WithTrait  = model_trait
-)
-
-for (nm in names(models)) {
-  cat("========================================\n")
-  cat("Model:", nm, "\n")
-  cat("========================================\n\n")
-  print(summary(models[[nm]]))
-  cat("\n\n")
-}
 
 
 # --- 13.Plot: Trait-Modulated Thermal Response across Species with Labels-------------------------------------------------

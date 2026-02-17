@@ -26,7 +26,7 @@ library(icesVocab)
 # -----------------------------
 # STEP 1. Define surveys and years
 # -----------------------------
-surveys <- c("EVHOE", "SP-NORTH")  # Additional surveys like "SP-ARSA" can be added later
+surveys <- c("SP-NORTH", "PT-IBTS")  # Additional surveys like "SP-ARSA" can be added later
 years <- 2010:2022
 quarter <- 1:4  # All quarters
 
@@ -64,12 +64,8 @@ safe_get_CA_year <- possibly(function(survey, yr) {
   df <- getDATRAS("CA", survey, year = yr, quarters = quarter)
   
   # Convert specific columns to character to avoid type mismatch issues
-  cols_to_char <- c(
-    "StNo", "HaulNo", "Ship", "StatRec", "GearEx", "Gear", "DoorType",
-    "LngtCode", "Sex", "Maturity", "StomSamp", "ParSamp", "MaturityScale", "AgeSource"
-  )
   df <- df %>%
-    mutate(across(any_of(cols_to_char), as.character))
+    mutate(across(everything(), as.character))
   
   return(df)
 }, otherwise = data.frame())
@@ -77,6 +73,7 @@ safe_get_CA_year <- possibly(function(survey, yr) {
 # -----------------------------
 # STEP 5. Download and combine all CA data
 # -----------------------------
+
 ca_all <- map_df(surveys, function(survey) {
   map_df(years, function(yr) {
     message("Downloading CA data for ", survey, " - Year ", yr)
@@ -99,6 +96,14 @@ summary(ca_all)
 # STEP 7. Identify empirical case study species
 # -----------------------------
 
+ca_all <- ca_all %>%
+  mutate(
+    CANoAtLngt = as.numeric(CANoAtLngt),
+    IndWgt     = as.numeric(IndWgt),
+    LngtClass  = as.numeric(LngtClass)
+  )
+
+
 # Find all species (SpecCode) with ≥1 catch record in every year
 species_full_years <- ca_all %>%
   filter(Year %in% years) %>%
@@ -120,6 +125,7 @@ head(species_full_years, 10)
 # -----------------------------
 
 # Define a function that maps ICES SpecCode to scientific names using the ICES SpecWoRMS vocabulary
+
 translate_spec_code_ices <- function(spec_codes) {
   species_vocab <- icesVocab::getCodeList("SpecWoRMS")
   

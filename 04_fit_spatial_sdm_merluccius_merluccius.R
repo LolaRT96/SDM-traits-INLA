@@ -38,13 +38,18 @@ library(patchwork)
 # --- 1. Load prepared SDM data ------------------------------------------------
 
 sdm_data <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluza.rds")
-summary(sdm_data)
+glimpse(sdm_data)
+sdm_data$Survey <- factor(sdm_data$Survey)
+levels(sdm_data$Survey)
+
+# sdm_dataNORTH <- sdm_data %>% filter(Survey %in% c("SP-NORTH")) %>%
+#   droplevels()
 
 # --- 2. Scale covariates and define variables --------------------------------
 
 df <- sdm_data %>%
   mutate(
-    mean_len_s = as.numeric(scale(mean_length_cm)),        # observed mean haul length
+    mean_len_s = as.numeric(scale(mean_length_mm)),        # observed mean haul length
     Depth_s    = as.numeric(scale(Depth)),                  # bottom depth
     BotTemp_s  = as.numeric(scale(BotTemp)),                # bottom temperature
     BotSal_s   = as.numeric(scale(BotSal)),                 # bottom salinity
@@ -56,17 +61,42 @@ summary(sdm_data)
 
 summary(df) 
 
-ggplot(df, aes(x= year_f, y = mean_length_cm))+
+ggplot(df, aes(x= year_f, y = mean_length_mm))+
   geom_boxplot()+
   theme_minimal()
-##Hay varios errores en la base de dato, por ejemplo la maxima longitud registrada son 990 cm (?????, una merluza de casi 10 metros?)
-##Hay muchos NAs en la longitud media ( NA's   :1799  )
-#la salinidad también esta mal, hay valores negativos 
-##Limpiar la base
+
+ggplot(df, aes(x= year_f, y = BotTemp))+
+  geom_point()+
+  theme_minimal()
+
+#Si la temperatura es -9 es que NO hay registro 
+
+ggplot(df, aes(x = ShootLong, y = ShootLat, color = BotTemp)) +
+  geom_point(size = 1.8, alpha = 0.7) +
+  scale_color_viridis_c(name = "Bottom temperature (°C)", na.value = "grey80") +
+  coord_equal() +
+  theme_classic() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    title = "Spatial distribution of bottom temperature"
+  )
+
+#Limpiar
+df_clean <- df %>%
+  mutate(
+    BotTemp = na_if(BotTemp, -9),
+    BotSal  = na_if(BotSal,  -9)
+  )
+
+summary(df_clean$BotTemp)
+summary(df_clean$mean_length_mm)
+df_clean$mean_length_cm <- df_clean$mean_length_mm /10
+summary(df_clean$mean_length_cm)
 
 vars_to_scale <- c("mean_len_s", "Depth_s", "BotTemp_s", "BotSal_s")
 
-df_1 <- df %>%
+df_1 <- df_clean %>%
   filter(if_all(all_of(vars_to_scale), ~ . >= -3.3 & . <= 3.3))
 
 summary(df_1)
@@ -77,165 +107,18 @@ cov_env <- df %>% select(Depth_s, BotTemp_s, BotSal_s)
 cor_env <- cor(cov_env, use = "complete.obs")
 print(cor_env)
 
-high_corr <- which(abs(cor_env) > 0.7 & abs(cor_env) < 1, arr.ind = TRUE)
-
-if (nrow(high_corr) > 0) {
-  drop_var <- names(which.max(colMeans(abs(cor_env))))
-  message("Dropping environmental covariate due to high collinearity: ", drop_var)
-  env_vars <- setdiff(names(cov_env), drop_var)
-} else {
-  env_vars <- names(cov_env)
-}
-
-message("Using environmental covariates: ", paste(env_vars, collapse = ", "))
-
 # Define fixed effect sets
-fixed_no_trait  <- env_vars
-fixed_with_trait <- c(env_vars, "mean_len_s")
+fixed_no_trait  <- c("BotTemp_s", "Depth_s")
+fixed_with_trait <- c("BotTemp_s", "Depth_s", "mean_len_s")
 
-# --- 4. Prepare spatial data (FOR A BARRIER MODEL, NOT USED)---------------------------------------------------
-
-#We are going to consider a barrier model as we have several coast lines and 
-#we have also islands in the area sampled 
-
-land <- ne_countries(scale = "large", returnclass = "sf")
-land_utm <- st_transform(land, 32630)
-
-# bbox
-bbox <- st_as_sfc(st_bbox(c(xmin=-13.88, xmax=1.35, ymin=40, ymax=55), crs = 4326))
-bbox_utm <- st_transform(bbox, 32630)
-
-# recortar tierra al bbox
-land_crop <- st_intersection(land_utm, bbox_utm)
-
-# unir todo en un solo polígono
-land_union <- st_union(land_crop)
-
-# océano = bbox - tierra
-ocean_poly <- st_difference(bbox_utm, land_union)
-
-# Visualizar
-plot(st_geometry(ocean_poly), col = "lightblue")
-plot(st_geometry(land_union), add = TRUE, col = "grey40")
-
-df_sf <- st_as_sf(df, coords = c("ShootLong", "ShootLat"), crs = 4326)
-df_sf <- st_transform(df_sf, crs = st_crs(ocean_poly))
-plot(st_geometry(ocean_poly))
-plot(st_geometry(land), add = TRUE, col = "grey")
-plot(st_geometry(df_sf), add = TRUE, col = "blue", cex = 0.5)
-
-# --- 5.1 Build triangulation mesh (FOR A BARRIER MODEL, NOT USED) ------------------------------------------------
-
-loc_sf <- st_as_sf(
-  df,
-  coords = c("ShootLong", "ShootLat"),
-  crs = 4326
-)
-
-loc_utm <- st_transform(loc_sf, crs = st_crs(ocean_poly))
-loc_xy <- st_coordinates(loc_utm)
-
-
-ocean_sp <- as(ocean_poly, "Spatial")
-boundary <- fmesher::fm_as_segm(ocean_sp)
-
-mesh <- fmesher::fm_mesh_2d_inla(
-  loc = loc_xy,
-  boundary = boundary,
-  max.edge = c(70000, 250000),
-  cutoff = 20000,
-  offset = c(70000, 150000), 
-  crs = 32630
-)
-
-mesh$n
-
-plot(mesh)
-plot(ocean_poly, add = TRUE, border = "blue", lwd = 2)
-points(loc_xy, col = "red", pch = 16, cex = 0.4)
-
-
-#Flujo de trabajo con un modelo de barrera (según el tutorial de Krainski)
-
-#Identificar los triangulos dentro del oceáno 
-
-water.tri <- fmesher::fm_contains(
-  ocean_poly, 
-  y = mesh, 
-  type = "centroid"
-)
-water.tri.idx <- water.tri[[1]]
-
-all.tri <- seq_len(nrow(mesh$graph$tv))
-barrier.tri <- setdiff(all.tri, water.tri.idx)
-
-#Construir la matriz de precisión
-# We consider the range for the barrier as a fraction of the range over the domain. 
-# We just use half of the average rectangle edges as the range in the domain and 10% of it in the barrier.
-
-sigma <- 1
-x_range <- range(mesh$loc[, 1])
-y_range <- range(mesh$loc[, 2])
-
-dx <- diff(x_range)
-dy <- diff(y_range)
-
-r <- mean(c(dx, dy))
-r
-range_domain  <- 0.5  * r
-range_barrier <- 0.05 * r
-
-# We now have to compute the Finite Element matrices needed for the model discretization, as detailed in Bakka et al. (2019).
-#Hay que modificar el operador diferencial para que la correlación no cruce as barreras, y que lo haga
-#de manera muy débil
-#Se construyen con esta funcion dos operadores diferenciales diferentes uno para el oceano y otro para la tierra, generando dos matrices 
-#FEM: de masa y de rigidez (laplacina), operando en: κ2−Δ
-
-bfem <- mesh2fem.barrier(mesh, barrier.tri)
-
-#En el segundo paso creamos la matriz de precision del campo latenta
-
-Q <- inla.barrier.q(
-  bfem,
-  ranges = c(range_domain, range_barrier),
-  sigma  = 1
-)
-
-
-#Model fitting 
-
-bmodel <- barrierModel.define(
-  mesh = mesh, 
-  barrier.triangles = barrier.tri,
-  prior.range = c(range_domain, 0.05),  # mejor que 1 fijo
-  prior.sigma = c(1, 0.01),
-  range.fraction = 0.1
-)
-
-model <- presence ~ Intercept(1) +
-  Depth_s + BotTemp_s + mean_len_s +
-  I(BotTemp_s * mean_len_s) +
-  f(year_f, model = "iid") +
-  field(
-    cbind(ShootLong, ShootLat),
-    model = bmodel
-  )
-
-result <- bru(
-  model,
-  data   = df,
-  family = "binomial"
-)
-
-spatial_field <- result$summary.random$field
-
-# --- 5. Build triangulation mesh 
 # --- 5.2 Build triangulation mesh 
 
-df_1 <- df
-coordinates(df_1) <- ~ShootLong + ShootLat
-proj4string(df_1) <- CRS("+proj=longlat +datum=WGS84")
-coords <- coordinates(df_1)
+loc <- cbind(df_1$ShootLong, df_1$ShootLat)
+loc <- as.data.frame(loc)
+colnames(loc) <- c("ShootLong", "ShootLat")
+coordinates(loc) <- ~ShootLong + ShootLat
+proj4string(loc) <- CRS("+proj=longlat +datum=WGS84")
+coords <- coordinates(loc)
 
 mesh <- inla.mesh.2d(
   loc      = coords,
@@ -243,11 +126,13 @@ mesh <- inla.mesh.2d(
   cutoff   = 0.1
 )
 
-plot(mesh); points(df_1, col = "red", pch = 16, cex = 0.5)
+plot(mesh);points(df_1, col = "red", pch = 16, cex = 0.5)
 
 mesh$n
 
 # --- 6. Define PC priors for SPDE and select best ------------------------------
+
+df_1 <- as.data.frame(df_1)
 
 spde_options <- list(
   loose = inla.spde2.pcmatern(mesh, alpha = 2,
@@ -257,12 +142,18 @@ spde_options <- list(
 )
 
 
-fit_spatial <- function(spde_model, covariates) {
+fit_spatial <- function(spde_model, covariates, df) {
+  
   idx <- inla.spde.make.index("spatial.field", spde_model$n.spde)
-  A <- inla.spde.make.A(mesh, loc = loc_xy)
+  
+  coords <- as.matrix(df[, c("ShootLong", "ShootLat")])
+  
+  A <- inla.spde.make.A(mesh, loc = coords)
+  
   df_cov <- df %>% 
     mutate(time_f = as.factor(year_f)) %>%
     select(all_of(covariates), year_f)
+  
   stk <- inla.stack(
     data = list(presence = df$presence),
     A = list(A, 1),
@@ -274,7 +165,8 @@ fit_spatial <- function(spde_model, covariates) {
   )
   
   formula <- as.formula(paste(
-    "presence ~", paste(c(covariates, "f(year_f, model = 'iid')"), collapse = " + "),
+    "presence ~", 
+    paste(c(covariates, "f(year_f, model = 'iid')"), collapse = " + "),
     "+ f(spatial.field, model = spde_model)"
   ))
   
@@ -290,7 +182,13 @@ fit_spatial <- function(spde_model, covariates) {
 }
 
 
-results <- lapply(spde_options, fit_spatial, covariates = fixed_with_trait)
+results <- lapply(
+  spde_options, 
+  fit_spatial, 
+  covariates = fixed_with_trait,
+  df = df_1
+)
+
 
 # Compare DIC for priors
 for (nm in names(results)) {
@@ -309,6 +207,19 @@ stk_with_trait     <- results[[best_prior]]$stack
 #                     prior.range = c(0.5, 0.05), prior.sigma = c(0.5, 0.05)
 
 # --- 7a. Fit spatial model WITH trait --------------------------------------
+
+coordinates(df_1) <- ~ShootLong + ShootLat
+proj4string(df_1) <- CRS("+proj=longlat +datum=WGS84")
+coords <- coordinates(df_1)
+
+mesh <- inla.mesh.2d(
+  loc      = coords,
+  max.edge = c(0.5, 2),
+  cutoff   = 0.1
+)
+plot(mesh);points(df_1, col = "red", pch = 16, cex = 0.5)
+
+mesh$n
 
 df_1 <- as.data.frame(df_1)
 
@@ -393,6 +304,9 @@ model_ns_bas <- inla(
   control.compute   = list(dic = TRUE, waic = TRUE, cpo = TRUE),
   verbose           = TRUE
 )
+
+model_ns_bas$dic$dic
+model_ns_bas$waic$waic
 
 f.4 <- y ~ -1 +intercept + Depth_s + BotTemp_s + mean_len_s +
   BotTemp_s:mean_len_s + 
@@ -490,23 +404,37 @@ df_wt_crop_merl <- df_wt_merluccius |>
 
 p_nt_merluccius <- ggplot(df_nt_crop_merl, aes(x, y, fill = value)) +
    geom_tile() +
+  labs(x = "Longitude", y = "Latitude", fill = "Spatial effect") +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "black", fill = "black") + 
   coord_fixed(xlim = c(-13.88, 1.35), ylim = c(40, 55)) +
-  theme_classic()
+  theme_classic()+
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 12),  
+    axis.text.y = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12))
 
 p_wt_merluccius <-ggplot(df_wt_crop_merl, aes(x, y, fill = value)) +
   geom_tile() +
+  labs(x = "Longitude", y = "Latitude", fill = "Spatial effect") +
   # geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "black", fill = "black") + 
   coord_fixed(xlim = c(-13.88, 1.35), ylim = c(40, 55)) +
-  theme_classic()
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 12),  
+    axis.text.y = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12))
 
 
-windows();(p_nt_merluccius | p_wt_merluccius)
+(p_nt_merluccius | p_wt_merluccius)
 
 # 1. Collect your models in a named list
 models_merluccius <- list(
@@ -524,6 +452,7 @@ saveRDS(
 
 
 # EXPLORACIÓN DEL MEJOR MODELO  -------------------------------------------
+
 
 #Relación de la temperatura y la longitud media 
 
@@ -545,11 +474,89 @@ beta <- spatial_with_trait$summary.fixed$mean
 grid$eta <- as.vector(X %*% beta)
 grid$prob <- 1 / (1 + exp(-grid$eta))  # probabilidad binomial
 
+
+
+
+
+
 ggplot(grid, aes(x = BotTemp_s, y = mean_len_s, fill = prob)) +
   geom_tile() +
   scale_fill_viridis_c(option = "magma") +
-  labs(x = "Temperature (scaled)", y = "Length (scaled)", fill = "Prob of presence") +
-  theme_minimal()
+  labs(x = "Bottom Temperature (°C)", y = "Mean body size (cm)", fill = "Probability of presence") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 12),  
+    axis.text.y = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.position = "bottom",
+    axis.line = element_line(color = "black", linewidth = 0.4),
+    axis.ticks = element_line(color = "black", linewidth = 0.3),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 12)
+  )
+
+##Valores desescalados
+
+df$temp_s <- (df$BotTemp_s - mean(df$BotTemp_s)) / sd(df$BotTemp_s)
+
+df$length_cm_s <- (df$mean_length_cm - mean(df$mean_length_cm)) / sd(df$mean_length_cm)
+
+mean_temp <- mean(df$BotTemp_s)
+sd_temp   <- sd(df$BotTemp_s)
+
+mean_length <- mean(df$mean_length_cm, na.rm = TRUE)
+sd_length   <- sd(df$mean_length_cm, na.rm = TRUE)
+
+temp_orig_seq <- seq(min(df$BotTemp_s), max(df$BotTemp_s), length.out = 50)
+length_orig_seq <- seq(min(df$mean_length_cm, na.rm = TRUE), max(df$mean_length_cm, na.rm = TRUE), length.out = 50)
+
+grid_orig <- expand.grid(
+  temp = temp_orig_seq,
+  length_cm = length_orig_seq)
+
+
+grid_orig$temp_s <- (grid_orig$temp - mean_temp) / sd_temp
+
+grid_orig$length_cm_s <- (grid_orig$length_cm - mean_length) / sd_length
+
+grid_orig$intercept <- 1
+
+grid_orig$bathy_s <- mean(df$Depth_s)  
+
+X <- model.matrix(~ -1 + intercept + bathy_s + temp_s + length_cm_s + temp_s:length_cm_s, data = grid_orig)
+beta <- spatial_with_trait$summary.fixed$mean
+grid_orig$eta <- as.vector(X %*% beta)
+
+grid_orig$prob <- 1 / (1 + exp(-grid_orig$eta))
+
+ggplot(grid_orig, aes(x = temp, y = length_cm, fill = prob)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "magma") +
+  labs(x = "Bottom Temperature (°C)", y = "Mean body size (cm)", fill = "Probability of presence") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 12),  
+    axis.text.y = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.position = "bottom",
+    axis.line = element_line(color = "black", linewidth = 0.4),
+    axis.ticks = element_line(color = "black", linewidth = 0.3),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 12)
+  )
+
+
+
+
+
 
 #Distribución de las marginales 
 

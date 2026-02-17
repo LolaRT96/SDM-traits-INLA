@@ -10,6 +10,7 @@
 # ==============================================================================
 
 # --- 1. Load libraries --------------------------------------------------------
+
 library(INLA)
 library(ggplot2)
 library(viridis)
@@ -20,6 +21,7 @@ library(fields)
 library(sp)
 library(metR)
 library(patchwork)
+library(paletteer)
 
 # --- 2. Simulate spatial domain and mesh -------------------------------------
 
@@ -28,14 +30,14 @@ set.seed(123)
 n_points <- 1000
 
 coords <- data.frame(
-  x = runif(n_points, -10, 10),
-  y = runif(n_points, 35, 45)
+  x = runif(n_points, 0, 100),
+  y = runif(n_points, 0, 100)
 )
 
 coordinates(coords) <- ~x + y
 
-mesh <- inla.mesh.2d(loc = coords, max.edge = c(0.5, 2), cutoff = 0.2)
-
+mesh <- inla.mesh.2d(loc = coords, max.edge = c(10, 15), cutoff = 0.8)
+mesh$n 
 
 plot(mesh, main = "SPDE Mesh")
 points(coords, col = "red", pch = 16, cex = 0.5)
@@ -43,13 +45,29 @@ points(coords, col = "red", pch = 16, cex = 0.5)
 
 # --- 3. Simulate species, traits, and environment ----------------------------
 
-n_species <- 10
+n_species <- 6
+
 species_id <- sample(1:n_species, n_points, replace = TRUE)
                      
 years <- sample(2015:2022, n_points, replace = TRUE)
 
 # Traits (mean body length) per species
-trait_species <- rnorm(n_species, mean = 40, sd = 15)
+
+#OLD CODE 
+# trait_species <- rnorm(n_species, mean = 40, sd = 15) 
+
+#More differences between traits 
+
+trait_species <- seq(25, 85, length.out = n_species) + rnorm(n_species, 0, 3)
+
+
+#There is no intravariation by species 
+#in the same group (species 1) you will have the same trait 
+
+#IT IS IMPORTANT TO UNDERSTAD THAT
+#Thermal sensitivity is the same between individuals of the same species 
+#but different between species 
+
 trait <- trait_species[species_id]
 
 # Environmental variables (scaled)
@@ -57,9 +75,17 @@ temp <- scale(rnorm(n_points, mean = 12, sd = 2))
 depth <- scale(rnorm(n_points, mean = 200, sd = 50))
 
 # Species-specific temperature sensitivity (slope ~ trait)
-temp_slope <- 0.2 + 0.02 * trait_species + rnorm(n_species, 0, 0.05)
+#OLD CODE 
+#temp_slope <- 0.2 + 0.02 * trait_species + rnorm(n_species, 0, 0.05)
+#NEW CODE
+temp_slope <- 0.1 + 0.05 * trait_species + rnorm(n_species, 0, 0.03)
+#Amplificacion de las variables ecologicas 
+
+#Species with larger body size will have more thermal sensitivity 
 
 linpred <- -1 + 0.5 * depth + temp_slope[species_id] * temp
+#depth: fixed effect
+#temp_slope[species_id] * temp: variable effect between species
 
 # Add spatial field
 
@@ -78,9 +104,9 @@ linpred_spatial <- linpred + spatial_field + rnorm(n_points, 0, 0.3)
 
 # Simulate presence-absence
 
-prob <- 1 / (1 + exp(-linpred_spatial))
+prob <- 1 / (1 + exp(-linpred_spatial)) #p=logit−1(η)
              
-presence <- rbinom(n_points, 1, prob)
+presence <- rbinom(n_points, 1, prob) #binary data bernuilli
 
 # --- 4. Prepare dataframe -----------------------------------------------------
 
@@ -95,13 +121,33 @@ sim_df <- data.frame(
   trait = trait
 )
 
-# Scale trait globally
+# Scale all numerical variables (tem, depht, trait)
 sim_df$trait_s <- scale(sim_df$trait)
+sim_df$temp_s <- scale(sim_df$temp)
+sim_df$depth_s <- scale(sim_df$depth)
 
 # Species-specific ID for slope
 sim_df$species_slope_id <- as.integer(sim_df$species)
 
+#Visualize each species in the field 
+sim_pres <- sim_df %>%
+  filter(presence == 1)
+
+ggplot(sim_pres, aes(x = x, y = y,
+                     color = species,
+                     shape = species)) +
+  geom_point(size = 3, alpha = 0.7) +
+  coord_equal() +
+  theme_classic() +
+  labs(
+    x = "X",
+    y = "Y",
+    color = "Species",
+    shape = "Species"
+  )
+
 # --- 5. INLA stack ------------------------------------------------------------
+
 coordinates(sim_df) <- ~x + y
 A <- inla.spde.make.A(mesh = mesh, loc = coordinates(sim_df))
 
@@ -109,8 +155,8 @@ effects <- list(
   spatial = s_index,
   data.frame(
     intercept = 1,
-    temp = sim_df$temp,
-    depth = sim_df$depth,
+    temp_s = sim_df$temp_s,
+    depth_s = sim_df$depth_s,
     species = sim_df$species,
     year = sim_df$year,
     trait_s = sim_df$trait_s,
@@ -126,57 +172,129 @@ stack <- inla.stack(
 )
 
 # --- 6. Fit models ------------------------------------------------------------
+
 # Model with shared slope (no trait modulation)
-formula_nt <- presence ~ temp + depth +
+# What mean?
+# All species behave in the same way in temperature changes, no diffferences in the thermal niche
+# Differences are only in the intercept
+
+formula_nt <- presence ~ -1 + temp_s + depth_s +
   f(species, model = "iid") +
   f(year, model = "iid") +
   f(spatial, model = spde)
 
 # Model with trait-modulated slope (random slope on temp)
-formula_trait <- presence ~ temp + depth + trait_s +
+# What mean?
+# Species differ in the thermal responses but is not dependent of the trait 
+# Trait is not added as a modular effect just additive 
+
+#Esta modificada con respecto a la de Maria por que a ella le salia por duplicado por que 
+#cada observacion tenia su propia pendiente, nosotras queremos un slope por especie 
+
+formula_trait <- presence ~ temp_s + depth_s + trait_s +
   f(species, model = "iid") +
-  f(species_slope_id, temp, model = "iid",
-    group = species_slope_id, control.group = list(model = "iid")) +
+  f(species_slope_id, temp_s, model = "iid") +
   f(year, model = "iid") +
   f(spatial, model = spde)
+
+# Model with trait*temp
+# What mean?
+# Thermal sensitivity depends on the trait 
+# It not capture the noise between species 
+
+formula_trait2 <- presence ~ -1 + temp_s * trait_s + depth_s +
+  f(species, model = "iid") +
+  f(year, model = "iid") +
+  f(spatial, model = spde)
+
+#Mixed formula 2 and 3
+# What mean?
+# We have a interaction between species and temperature 
+# and we also have a residual slope by species 
+# the thermal niche depends on the trait with variability between species 
+
+# formula_trait3 <- presence ~  -1 + temp_s * trait_s + depth_s +
+#   f(species, model = "iid") +
+#   f(species_slope_id, temp_s, model = "iid",
+#     group = species_slope_id, control.group = list(model = "iid")) +
+#   f(year, model = "iid") +
+#   f(spatial, model = spde)
+#Usando group= en la tercera parte del modelo, se asocia un efecto aleatorio para cada OBSERVACIÓN 
+
+
+formula_trait3_fix <- presence ~ -1 + temp_s * trait_s + depth_s + 
+  f(species, model = "iid") + 
+  f(species_slope_id, temp_s, model = "iid") + 
+  f(year, model = "iid") + 
+  f(spatial, model = spde)
+
+#En la tercera parte del modelo 
 
 model_nt <- inla(formula_nt, family = "binomial",
                  data = inla.stack.data(stack),
                  control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
-                 control.compute = list(dic = TRUE, waic = TRUE))
+                 control.compute = list(dic = TRUE, waic = TRUE),
+                 verbose = TRUE)
 
 model_trait <- inla(formula_trait, family = "binomial",
                     data = inla.stack.data(stack),
                     control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
-                    control.compute = list(dic = TRUE, waic = TRUE))
+                    control.compute = list(dic = TRUE, waic = TRUE),
+                    verbose = TRUE)
+
+model_trait2 <- inla(formula_trait2, family = "binomial",
+                    data = inla.stack.data(stack),
+                    control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
+                    control.compute = list(dic = TRUE, waic = TRUE),
+                    verbose = TRUE)
+
+model_trait3 <- inla(formula_trait3_fix, family = "binomial",
+                     data = inla.stack.data(stack),
+                     control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
+                     control.compute = list(dic = TRUE, waic = TRUE),
+                     verbose = TRUE)
 
 
 #Compare model fits
+
 comparison <- tibble::tibble(
-  Model = c("Spatial_NoTrait", "Spatial_Trait"),
-  DIC   = c(model_nt$dic$dic, model_trait$dic$dic),
-  WAIC  = c(model_nt$waic$waic, model_trait$waic$waic)
+  Model = c("Spatial_NoTrait", "Spatial_Trait", "Spatial_Trait2", "Spatial_Trait3"),
+  DIC   = c(model_nt$dic$dic, model_trait$dic$dic, model_trait2$dic$dic, model_trait3$dic$dic),
+  WAIC  = c(model_nt$waic$waic, model_trait$waic$waic, model_trait2$waic$waic, model_trait3$waic$waic)
 )
 
 print(comparison)
 
 
 # --- 7. Evaluate performance --------------------------------------------------
+
 idx <- inla.stack.index(stack, "est")$data
 pred_df <- sim_df@data
 pred_df$pred_nt <- model_nt$summary.fitted.values$mean[idx]
 pred_df$pred_trait <- model_trait$summary.fitted.values$mean[idx]
+pred_df$pred_trait2 <- model_trait2$summary.fitted.values$mean[idx]
+pred_df$pred_trait3 <- model_trait3$summary.fitted.values$mean[idx]
 
 roc_nt <- roc(pred_df$presence, pred_df$pred_nt)
 roc_trait <- roc(pred_df$presence, pred_df$pred_trait)
+roc_trait2 <- roc(pred_df$presence, pred_df$pred_trait2)
+roc_trait3 <- roc(pred_df$presence, pred_df$pred_trait3)
 
-png("plots/simulated_multi/roc_comparison_multispecies_sim.png", 800, 600)
-plot(roc_trait, col = "blue", lwd = 2, main = "ROC: Trait vs No Trait")
-lines(roc_nt, col = "green", lwd = 2)
-legend("bottomright", legend = c("With Trait", "No Trait"), col = c("blue", "green"), lwd = 2)
-dev.off()
+roc_vals <- tibble::tibble(
+  Model = comparison$Model,
+  AUC   = c(
+    auc(roc(pred_df$presence, pred_df$pred_nt)),
+    auc(roc(pred_df$presence, pred_df$pred_trait)),
+    auc(roc(pred_df$presence, pred_df$pred_trait2)),
+    auc(roc(pred_df$presence, pred_df$pred_trait3))
+  )
+)
+
+print(roc_vals)
+
 
 # --- 8. Spatial field plots ---------------------------------------------------
+
 projr <- inla.mesh.projector(mesh, dims = c(200, 200))
 field_trait <- inla.mesh.project(projr, model_trait$summary.random$spatial$mean)
 field_nt <- inla.mesh.project(projr, model_nt$summary.random$spatial$mean)
@@ -243,7 +361,7 @@ windows();(p_nt_multiSimu | p_wt_multiSimu)
 
 # --- 9. Trait vs slope relationship -------------------------------------------
 
-slopes <- model_trait$summary.random$species_slope_id %>%
+slopes <- model_trait3$summary.random$species_slope_id %>%
   as_tibble() %>%
   rename(
     species_id = ID,
@@ -266,8 +384,6 @@ ggplot(slope_trait, aes(x = trait, y = slope_mean)) +
   labs(x = "Trait (mean body length)", y = "Temperature slope (θⱼ)",
        title = "Trait-Modulated Thermal Response") +
   theme_minimal()
-
-
 
 library(ggplot2)
 library(ggrepel)
@@ -313,23 +429,11 @@ ggplot(slopes_with_trait,
     y = "Species",
     title = "Species-Specific Sensitivity to Bottom Temperature"
   ) +
-  theme_minimal(base_size = 13) +
+  theme_classic() +
   theme(
     legend.position = "right",
     panel.grid.minor = element_blank(),
     panel.grid.major.y = element_blank()
   )
-
-
-
-
-
-
-
-
-
-
-
-
 
 

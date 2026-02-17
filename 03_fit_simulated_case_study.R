@@ -29,6 +29,13 @@ library(patchwork)
 library(metR)
 library(withr)
 library(fmesher)
+library(showtext)
+library(sysfonts)
+
+font_add("Helvetica", 
+         regular = "C:/Users/mdolores.riesgo/Downloads/helvetica-255/Helvetica.ttf")
+showtext_auto()
+
 
 # --- 1. Simulate SDM-like data ------------------------------------------------
 
@@ -118,6 +125,7 @@ p_bathy <- ggplot(grid_bathy_df, aes(x =x, y = y, fill = bathy)) +
   scale_y_continuous(expand = c(0, 0)) + 
   theme_classic() +
   theme( 
+    text = element_text(family = "Helvetica"),
     axis.text = element_text(size = 13), axis.title = element_text(size = 14),
     legend.position   = "right",
     axis.line         = element_line(color = "black", linewidth = 0.4),
@@ -137,6 +145,7 @@ p_bathy
 anomalies <- cumsum(rnorm(n_time, mean = 0, sd = 0.2))
 
 # Función que convierte profundidad en temperatura
+
 temp_from_depth <- function(depth) {
   17 - (depth - 50) * (12 / 150)
 }
@@ -159,12 +168,28 @@ for (t in seq_len(n_time)) {
 
 grid_temp_df <- bind_rows(grid_temp_list)
 
-ggplot(grid_temp_df, aes(x = x, y = y, fill = temp)) +
+p_temp <- ggplot(grid_temp_df, aes(x = x, y = y, fill = temp)) +
   geom_tile() +
-  facet_wrap(~time, ncol = 3) +
+  facet_wrap(~time, ncol = 4) +
   coord_equal() +
   scale_fill_viridis_c(option = "H") +
-  labs(x = "x", y = "y", fill = "Temp (°C)")
+  labs(x = "x", y = "y", fill = "Temp (°C)") +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0)) +
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    legend.position   = "right",
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid        = element_blank(),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  )
+
+p_temp 
 
 
 # Bottom salinity ---------------------------------------------------------
@@ -731,19 +756,42 @@ df_wt <- expand.grid(
 
 p_nt <-ggplot(df_nt, aes(x, y, fill = value)) +
   geom_raster() +
-  scale_fill_distiller(palette = "RdBu", direction = -1) +
+  scale_fill_distiller(palette = "RdBu", direction = -1,  name = "Spatial effect") +
   xlim(0,100) + ylim(0,100)+
   coord_equal(expand = FALSE) +
-  theme_classic()
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    legend.position   = "right",
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid        = element_blank(),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  )
+
 
 p_wt <-ggplot(df_wt, aes(x, y, fill = value)) +
   geom_raster() +
-  scale_fill_distiller(palette = "RdBu", direction = -1) +
+  scale_fill_distiller(palette = "RdBu", direction = -1,  name = "Spatial effect") +
   coord_equal(expand = FALSE) +
   xlim(0,100) + ylim(0,100)+
-  theme_classic()
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    legend.position   = "right",
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid        = element_blank(),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  )
 
-windows();(p_nt | p_wt)
+(p_nt | p_wt)
 
 # El campo espacial positivo indica zonas donde la probabilidad predicha es mayor 
 # de lo que explican las covariables; negativo indica zonas donde es menor. 
@@ -808,13 +856,25 @@ X <- model.matrix(~ -1 + intercept + bathy_s + temp_s + length_cm_s + temp_s:len
 beta <- spatial_with_trait$summary.fixed$mean
 grid_orig$eta <- as.vector(X %*% beta)
 grid_orig$prob <- 1 / (1 + exp(-grid_orig$eta))
+
 ggplot(grid_orig, aes(x = temp, y = length_cm, fill = prob)) +
  geom_tile() +
  scale_fill_viridis_c(option = "magma") +
- labs(x = "Bottom Temperature (°C)", y = "Length (cm)", fill = "Prob of presence") +
- theme_minimal()
-
-
-
+ labs(x = "Bottom Temperature (°C)", y = "Mean body size (cm)", fill = "Probability of presence") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 12),  
+    axis.text.y = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    legend.position = "bottom",
+    axis.line = element_line(color = "black", linewidth = 0.4),
+    axis.ticks = element_line(color = "black", linewidth = 0.3),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 12)
+  )
 
 
