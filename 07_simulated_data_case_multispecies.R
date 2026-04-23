@@ -22,6 +22,12 @@ library(sp)
 library(metR)
 library(patchwork)
 library(paletteer)
+library(showtext)
+library(sysfonts)
+
+font_add("Helvetica", 
+         regular = "C:/Users/mdolores.riesgo/Downloads/helvetica-255/Helvetica.ttf")
+showtext_auto()
 
 # --- 2. Simulate spatial domain and mesh -------------------------------------
 
@@ -99,8 +105,13 @@ A_matrix <- inla.spde.make.A(mesh = mesh, loc = coordinates(coords))
 w <- rnorm(spde$n.spde, mean = 0, sd = 1)
 spatial_field <- as.vector(A_matrix %*% w)
 
-# Add spatial and yearly noise
-linpred_spatial <- linpred + spatial_field + rnorm(n_points, 0, 0.3)
+spatial_strength <- 2.5
+noise_sd <- 0.2
+ 
+linpred_spatial <- linpred + spatial_strength * spatial_field + rnorm(n_points, 0, noise_sd)
+
+# # # Add spatial and yearly noise
+# linpred_spatial <- linpred + spatial_field + rnorm(n_points, 0, 0.3)
 
 # Simulate presence-absence
 
@@ -146,6 +157,52 @@ ggplot(sim_pres, aes(x = x, y = y,
     shape = "Species"
   )
 
+summary_length_spp <- sim_df %>%
+  group_by(species) %>%
+  summarise(mean_size = mean(trait, na.rm = TRUE),
+            mean_sd =sd(trait))
+
+summary_length_spp
+
+summary_length_spp <- as.data.frame(summary_length_spp)
+write.xlsx(summary_length_spp,
+           file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/summary_length_spp.xlsx",
+           rowNames = FALSE)
+
+
+ggplot(sim_pres, aes(x = x, y = y,
+                     color = trait,
+                     shape = species)) +
+  geom_point(size = 3, alpha = 0.7) +
+  scale_color_viridis_c() +
+  coord_equal() +
+  theme_classic() +
+  labs(
+    x = "X",
+    y = "Y",
+    color = "Size",
+    shape = "Species"
+  )
+
+sim_pres$trait_f <- as.factor(sim_pres$trait)
+
+
+ggplot(sim_pres, aes(x = x, y = y,
+                     color = trait_f,
+                     shape = species)) +
+  geom_point(size = 3, alpha = 0.7) +
+  scale_color_viridis_d() +
+  coord_equal() +
+  theme_classic() +
+  labs(
+    x = "X",
+    y = "Y",
+    color = "Size",
+    shape = "Species"
+  )
+
+
+
 # --- 5. INLA stack ------------------------------------------------------------
 
 coordinates(sim_df) <- ~x + y
@@ -183,50 +240,23 @@ formula_nt <- presence ~ -1 + temp_s + depth_s +
   f(year, model = "iid") +
   f(spatial, model = spde)
 
-# Model with trait-modulated slope (random slope on temp)
-# What mean?
-# Species differ in the thermal responses but is not dependent of the trait 
-# Trait is not added as a modular effect just additive 
-
-#Esta modificada con respecto a la de Maria por que a ella le salia por duplicado por que 
-#cada observacion tenia su propia pendiente, nosotras queremos un slope por especie 
-
-formula_trait <- presence ~ temp_s + depth_s + trait_s +
-  f(species, model = "iid") +
-  f(species_slope_id, temp_s, model = "iid") +
-  f(year, model = "iid") +
-  f(spatial, model = spde)
-
-# Model with trait*temp
-# What mean?
-# Thermal sensitivity depends on the trait 
-# It not capture the noise between species 
-
-formula_trait2 <- presence ~ -1 + temp_s * trait_s + depth_s +
-  f(species, model = "iid") +
-  f(year, model = "iid") +
-  f(spatial, model = spde)
-
-#Mixed formula 2 and 3
+# Model with thermal-slope 
 # What mean?
 # We have a interaction between species and temperature 
 # and we also have a residual slope by species 
 # the thermal niche depends on the trait with variability between species 
 
-# formula_trait3 <- presence ~  -1 + temp_s * trait_s + depth_s +
-#   f(species, model = "iid") +
-#   f(species_slope_id, temp_s, model = "iid",
-#     group = species_slope_id, control.group = list(model = "iid")) +
-#   f(year, model = "iid") +
-#   f(spatial, model = spde)
-#Usando group= en la tercera parte del modelo, se asocia un efecto aleatorio para cada OBSERVACIÓN 
-
-
-formula_trait3_fix <- presence ~ -1 + temp_s * trait_s + depth_s + 
+formula_trait <- presence ~ -1 + temp_s * trait_s + depth_s + 
   f(species, model = "iid") + 
   f(species_slope_id, temp_s, model = "iid") + 
   f(year, model = "iid") + 
   f(spatial, model = spde)
+
+# Model with thermal-slope but without spatial effect
+formula_trait_Nospatial <- presence ~ -1 + temp_s * trait_s + depth_s + 
+  f(species, model = "iid") + 
+  f(species_slope_id, temp_s, model = "iid") + 
+  f(year, model = "iid") 
 
 #En la tercera parte del modelo 
 
@@ -237,31 +267,30 @@ model_nt <- inla(formula_nt, family = "binomial",
                  verbose = TRUE)
 
 model_trait <- inla(formula_trait, family = "binomial",
-                    data = inla.stack.data(stack),
-                    control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
-                    control.compute = list(dic = TRUE, waic = TRUE),
-                    verbose = TRUE)
-
-model_trait2 <- inla(formula_trait2, family = "binomial",
-                    data = inla.stack.data(stack),
-                    control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
-                    control.compute = list(dic = TRUE, waic = TRUE),
-                    verbose = TRUE)
-
-model_trait3 <- inla(formula_trait3_fix, family = "binomial",
                      data = inla.stack.data(stack),
                      control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
                      control.compute = list(dic = TRUE, waic = TRUE),
                      verbose = TRUE)
 
+model_trait_Nospatial <- inla(formula_trait_Nospatial, family = "binomial",
+                     data = inla.stack.data(stack),
+                     control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
+                     control.compute = list(dic = TRUE, waic = TRUE),
+                     verbose = TRUE)
 
 #Compare model fits
 
 comparison <- tibble::tibble(
-  Model = c("Spatial_NoTrait", "Spatial_Trait", "Spatial_Trait2", "Spatial_Trait3"),
-  DIC   = c(model_nt$dic$dic, model_trait$dic$dic, model_trait2$dic$dic, model_trait3$dic$dic),
-  WAIC  = c(model_nt$waic$waic, model_trait$waic$waic, model_trait2$waic$waic, model_trait3$waic$waic)
+  Model = c("Spatial_NoTrait", "Spatial_Trait", "NonSpatial_Trait"),
+  DIC   = c(model_nt$dic$dic, model_trait$dic$dic, model_trait_Nospatial$dic$dic),
+  WAIC  = c(model_nt$waic$waic, model_trait$waic$waic, model_trait_Nospatial$waic$waic)
 )
+
+comparison <- comparison %>%
+  mutate(
+    DIC  = formatC(DIC, format = "f", digits = 2),
+    WAIC = formatC(WAIC, format = "f", digits = 2)
+  )
 
 print(comparison)
 
@@ -272,21 +301,18 @@ idx <- inla.stack.index(stack, "est")$data
 pred_df <- sim_df@data
 pred_df$pred_nt <- model_nt$summary.fitted.values$mean[idx]
 pred_df$pred_trait <- model_trait$summary.fitted.values$mean[idx]
-pred_df$pred_trait2 <- model_trait2$summary.fitted.values$mean[idx]
-pred_df$pred_trait3 <- model_trait3$summary.fitted.values$mean[idx]
+pred_df$pred_trait_nonspatial<- model_trait_Nospatial$summary.fitted.values$mean[idx]
 
 roc_nt <- roc(pred_df$presence, pred_df$pred_nt)
 roc_trait <- roc(pred_df$presence, pred_df$pred_trait)
-roc_trait2 <- roc(pred_df$presence, pred_df$pred_trait2)
-roc_trait3 <- roc(pred_df$presence, pred_df$pred_trait3)
+roc_trait_nospatial <- roc(pred_df$presence, pred_df$pred_trait_nonspatial)
 
 roc_vals <- tibble::tibble(
   Model = comparison$Model,
   AUC   = c(
     auc(roc(pred_df$presence, pred_df$pred_nt)),
     auc(roc(pred_df$presence, pred_df$pred_trait)),
-    auc(roc(pred_df$presence, pred_df$pred_trait2)),
-    auc(roc(pred_df$presence, pred_df$pred_trait3))
+    auc(roc(pred_df$presence, pred_df$pred_trait_nonspatial))
   )
 )
 
@@ -295,7 +321,7 @@ print(roc_vals)
 
 # --- 8. Spatial field plots ---------------------------------------------------
 
-projr <- inla.mesh.projector(mesh, dims = c(200, 200))
+projr <- inla.mesh.projector(mesh, dims = c(300, 300))
 field_trait <- inla.mesh.project(projr, model_trait$summary.random$spatial$mean)
 field_nt <- inla.mesh.project(projr, model_nt$summary.random$spatial$mean)
 
@@ -316,48 +342,70 @@ df_wt_multiSimu <- expand.grid(
 #No traits
 p_nt_multiSimu <- ggplot(df_nt_multiSimu, aes(x, y, fill = value)) +
   geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  geom_text_contour(
-    aes(z = value),
-    stroke = 0.15,
-    size = 3,
-    skip = 0      # <- etiqueta TODAS las líneas
-  ) +
-  scale_fill_distiller(
+   scale_fill_distiller(
     palette = "RdBu",
     direction = -1,
-    name = "Mean"
-  ) +
+     name = "Spatial effect"
+   ) +
   labs(
-    title = "(a) Without trait",
-    x = "Longitude",
-    y = "Latitude"
+    x = "x",
+    y = "y"
   ) +
-  theme_classic()
+  xlim(0,100) + ylim(0,100)+
+  coord_equal(expand = FALSE) +
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    legend.position   = "right",
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid        = element_blank(),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  )
+
 
 #With trait
 p_wt_multiSimu <- ggplot(df_wt_multiSimu, aes(x, y, fill = value)) +
   geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  geom_text_contour(
-    aes(z = value),
-    stroke = 0.15,
-    size = 3,
-    skip = 0      # <- etiqueta TODAS las líneas
-  ) +
   scale_fill_distiller(
     palette = "RdBu",
     direction = -1,
-    name = "Mean"
+    name = "Spatial effect"
   ) +
   labs(
-    title = "(b) With trait",
-    x = "Longitude",
-    y = "Latitude"
+    x = "x",
+    y = "y"
   ) +
-  theme_classic()
+  xlim(0,100) + ylim(0,100)+
+  coord_equal(expand = FALSE) +
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    legend.position   = "right",
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid        = element_blank(),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  )
 
 windows();(p_nt_multiSimu | p_wt_multiSimu)
+
+combination <- (p_nt_multiSimu | p_wt_multiSimu)
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/simulation_multi.png",
+  plot = combination,
+  width = 972,    # ancho en píxeles
+  height = 380,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 # --- 9. Trait vs slope relationship -------------------------------------------
 
@@ -423,17 +471,56 @@ ggplot(slopes_with_trait,
                 linewidth = 1) +
   geom_point(size = 5) +
   geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.4, color = "red") +
-  scale_color_paletteer_c("viridis::turbo", name = "trait") +
+  scale_color_paletteer_c("viridis::turbo", name = "Body size") +
   labs(
     x = "Temperature effect (slope)",
-    y = "Species",
-    title = "Species-Specific Sensitivity to Bottom Temperature"
+    y = "Species"
   ) +
   theme_classic() +
   theme(
     legend.position = "right",
     panel.grid.minor = element_blank(),
-    panel.grid.major.y = element_blank()
+    panel.grid.major.y = element_blank(),
+    text = element_text(family = "Helvetica"),
   )
 
+thermal_slope <- ggplot(slopes_with_trait, 
+       aes(x = mean_slope, 
+           y = SpeciesID,
+           color = factor(round(trait, 0)))) +  
+  geom_errorbar(aes(xmin = lower, xmax = upper),
+                orientation = "y",
+                width = 0,
+                linewidth = 1) +
+  geom_point(size = 5) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             alpha = 0.4, color = "red") +
+  scale_color_viridis_d(option = "turbo",
+                        name = "Trait (cm)") +
+  labs(
+    x = "Temperature effect (slope)",
+    y = "Species"
+  ) +
+  theme_classic()+
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(face = "bold", size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 14)
+  )
 
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/thermal_slope_sim.png",
+  plot = thermal_slope,
+  width = 567,    # ancho en píxeles
+  height = 426,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)

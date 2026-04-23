@@ -139,6 +139,15 @@ p_bathy <- ggplot(grid_bathy_df, aes(x =x, y = y, fill = bathy)) +
 p_bathy
 
 
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/bathy.png",
+  plot = p_bathy,
+  width = 1016,    # ancho en píxeles
+  height = 393,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
 # Bottom temperature ---------------------------------------------------------
 
 # Anomalías temporales suaves
@@ -170,7 +179,7 @@ grid_temp_df <- bind_rows(grid_temp_list)
 
 p_temp <- ggplot(grid_temp_df, aes(x = x, y = y, fill = temp)) +
   geom_tile() +
-  facet_wrap(~time, ncol = 4) +
+  # facet_wrap(~time, ncol = 4) +
   coord_equal() +
   scale_fill_viridis_c(option = "H") +
   labs(x = "x", y = "y", fill = "Temp (°C)") +
@@ -191,6 +200,45 @@ p_temp <- ggplot(grid_temp_df, aes(x = x, y = y, fill = temp)) +
 
 p_temp 
 
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/p_temp.png",
+  plot = p_temp,
+  width = 1016,    # ancho en píxeles
+  height = 393,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
+
+temp_time_df <- grid_temp_df %>%
+  group_by(time) %>%
+  summarise(temp_mean = mean(temp), 
+            temp_sd = sd(temp), .groups = "drop") %>%
+  mutate(temp_upper = temp_mean + temp_sd,
+         temp_lower = temp_mean - temp_sd)
+
+# Gráfico de variación temporal
+p_temp_time <- ggplot(temp_time_df, aes(x = time, y = temp_mean)) +
+  geom_line(color = "steelblue", size = 1) +
+  labs(x = "Time (unit)", y = "Mean Temp (°C)")+
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, face = "bold")
+  )
+
+p_temp_time
+
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/p_temp_time.png",
+  plot = p_temp_time,
+  width = 682,    # ancho en píxeles
+  height = 393,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 # Bottom salinity ---------------------------------------------------------
 
@@ -589,6 +637,7 @@ s.index <- inla.spde.make.index(name = "spatial.field", n.spde = spde$n.spde)
 #Define A
 A <- inla.spde.make.A(mesh, loc)
 
+
 #Define stack
 stack.1 <- inla.stack(
   data   = list(y = df$pres),
@@ -688,6 +737,12 @@ comparison <- tibble::tibble(
   WAIC  = c(spatial_no_trait$waic$waic, spatial_with_trait$waic$waic,
             model_ns_base$waic$waic,      model_ns_trait$waic$waic)
 )
+
+comparison <- comparison %>%
+  mutate(
+    DIC  = formatC(DIC, format = "f", digits = 2),
+    WAIC = formatC(WAIC, format = "f", digits = 2)
+  )
 
 print(comparison)
 
@@ -791,11 +846,84 @@ p_wt <-ggplot(df_wt, aes(x, y, fill = value)) +
     strip.text        = element_text(face = "bold", size = 12)  
   )
 
-(p_nt | p_wt)
+combination <- (p_nt | p_wt)
 
-# El campo espacial positivo indica zonas donde la probabilidad predicha es mayor 
-# de lo que explican las covariables; negativo indica zonas donde es menor. 
-# Son efectos residuales suavizados del proceso espacial.
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/simulation.png",
+  plot = combination,
+  width = 972,    # ancho en píxeles
+  height = 380,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
+#Diferencia entre mapas 
+
+df_both <- df_nt %>%
+inner_join(
+df_wt,
+by = c("x", "y"),
+suffix = c("_nt", "_wt")
+)
+
+df_both <- df_both %>% 
+  rename( value_nt = value_nt,
+          value_wt = value_wt)
+
+head(df_both)
+
+df_both$diff <- df_both$value_nt - df_both$value_wt
+head(df_both)
+df_both$sim <- -abs(df_both$diff)
+head(df_both)
+
+df_sim <- df_both %>% 
+  mutate(
+  diff = abs(value_nt - value_wt),
+  similarity = ifelse(diff > 0.1, "Not similar", "Similar"))
+head(df_sim)
+
+
+p_sim <-ggplot(df_sim, aes(x, y, fill = sim)) +
+  geom_raster() +
+  coord_equal(expand = FALSE) +
+  xlim(0,100) + ylim(0,100) +
+  scale_fill_gradient2(
+    midpoint = 0,
+    low = "red",
+    mid = "white",
+    high = "blue",
+    name = "Similarity"
+  ) +
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    legend.position   = "right",
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid        = element_blank(),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  )
+
+p_sim
+
+
+combination2 <- (p_wt | p_sim)
+
+combination2
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/simulation2.png",
+  plot = combination2,
+  width = 972,    # ancho en píxeles
+  height = 380,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
 
 # 11. Save the models
 
@@ -857,7 +985,7 @@ beta <- spatial_with_trait$summary.fixed$mean
 grid_orig$eta <- as.vector(X %*% beta)
 grid_orig$prob <- 1 / (1 + exp(-grid_orig$eta))
 
-ggplot(grid_orig, aes(x = temp, y = length_cm, fill = prob)) +
+prob_len <- ggplot(grid_orig, aes(x = temp, y = length_cm, fill = prob)) +
  geom_tile() +
  scale_fill_viridis_c(option = "magma") +
  labs(x = "Bottom Temperature (°C)", y = "Mean body size (cm)", fill = "Probability of presence") +
@@ -866,15 +994,23 @@ ggplot(grid_orig, aes(x = temp, y = length_cm, fill = prob)) +
   theme_classic() +
   theme(
     text = element_text(family = "Helvetica"),
-    axis.text.x = element_text(size = 12),  
-    axis.text.y = element_text(size = 12),
-    axis.text = element_text(size = 12),
-    axis.title = element_text(size = 12),
-    legend.position = "bottom",
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    legend.position = "right",
     axis.line = element_line(color = "black", linewidth = 0.4),
     axis.ticks = element_line(color = "black", linewidth = 0.3),
     strip.background = element_blank(),
-    strip.text = element_text(face = "bold", size = 12)
+    strip.text = element_text(face = "bold", size = 14)
   )
 
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/probability_simulated.png",
+  plot = prob_len,
+  width = 647,    # ancho en píxeles
+  height = 457,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 

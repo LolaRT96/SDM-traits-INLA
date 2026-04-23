@@ -25,6 +25,15 @@ library(INLA)
 library(viridis)
 library(pROC)
 library(sp)
+library(mapdata)
+world <- map_data("world")
+class(world)
+library(showtext)
+library(sysfonts)
+
+font_add("Helvetica", 
+         regular = "C:/Users/mdolores.riesgo/Downloads/helvetica-255/Helvetica.ttf")
+showtext_auto()
 
 #dir.create("plots/empirical_multi", recursive = TRUE, showWarnings = FALSE)
 
@@ -74,11 +83,18 @@ summary(sdm_data_multi)
 ## 3.5. We do not want every species, select the important
 
 levels(sdm_data_multi$Species)
+levels(sdm_data_multi$Survey)
 
-# sdm_data_multi <- sdm_data_multi %>%
-#   filter(Species %in% c("Lepidorhombus whiffiagonis", "Micromesistius poutassou", 
-#                         "Trachurus trachurus", "Scomber scombrus",  "Micromesistius poutassou", 
-#                         "Lepidorhombus boscii"))
+sdm_data_multi_df <- as.data.frame(sdm_data_multi)
+
+sdm_data_multi_filter <- sdm_data_multi_df %>%
+ filter(Species %in% c("Lepidorhombus whiffiagonis", 
+            "Trachurus trachurus", "Scomber scombrus",  
+            "Lepidorhombus boscii", "Merluccius merluccius", 
+            "Micromesistius poutassou")) %>%
+  droplevels()
+
+levels(sdm_data_multi_filter$Species)
 
 # plot histogram of sizes (cm)
 
@@ -106,21 +122,84 @@ media_por_especie <- sdm_data_multi %>%
 
 media_por_especie
 
+ggplot(sdm_data_multi, aes(x = ShootLong, y = ShootLat, color = BotTemp)) +
+  geom_point(size = 1.8, alpha = 0.7) +
+  scale_color_viridis_c(name = "Bottom temperature (°C)", na.value = "grey80") +
+  coord_equal() +
+  theme_classic() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    title = "Spatial distribution of bottom temperature"
+  )
+
+ggplot(sdm_data_multi, aes(x = ShootLong, y = ShootLat, color = mean_length)) +
+  geom_point(size = 1.8, alpha = 0.7) +
+  scale_color_viridis_c(name = "Mean Length cm", na.value = "grey80") +
+  coord_equal() +
+  theme_classic() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    title = "Spatial distribution of bottom temperature"
+  )
+
+
+sdm_data_multi$mean_length_cm <- sdm_data_multi$mean_length / 10
+
+ggplot(sdm_data_multi, aes(x = ShootLong, y = ShootLat, color = mean_length_cm)) +
+  geom_point(size = 1.8, alpha = 0.7) +
+  scale_color_viridis_c(name = "Mean Length cm", na.value = "grey80") +
+  coord_equal() +
+  theme_classic() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    title = "Spatial distribution of bottom temperature"
+  )
+
+
+p_surveys_multi <- ggplot() +
+  geom_point(data = sdm_data_multi_filter, 
+             aes(x = ShootLong, y = ShootLat),
+             alpha = 0.4, size = 2,  color = "steelblue") +
+  geom_map(data=world, map = world, aes(long, lat, map_id = region),
+           color = "black", fill = "gray95") + 
+  coord_fixed(xlim = c(-10, -1), ylim = c(41, 46)) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "right"
+  )
+
+p_surveys_multi
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/p_surveys_multi.png",
+  plot = p_surveys_multi,
+  width = 901,    # ancho en píxeles
+  height = 397,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 # --- 3. Create SPDE mesh and model --------------------------------------------
 # Convert coordinates to spatial format
-coordinates(sdm_data_multi) <- ~ShootLong + ShootLat
+coordinates(sdm_data_multi_filter) <- ~ShootLong + ShootLat
 
 # Build mesh using point locations
 mesh <- inla.mesh.2d(
-  loc = coordinates(sdm_data_multi),
+  loc = coordinates(sdm_data_multi_filter),
   max.edge = c(0.5, 2),  # Finer mesh near observations, coarser in outer
   cutoff   = 0.1         # Minimum distance between points
 )
 
 plot(mesh, main = "SPDE Mesh for Multispecies SDM")
-points(sdm_data_multi@coords, col = "red", pch = 16, cex = 0.4)
-dev.off()
+points(sdm_data_multi_filter@coords, col = "red", pch = 16, cex = 0.4)
+
 
 # Define SPDE model with PC priors
 spde <- inla.spde2.pcmatern(
@@ -134,11 +213,11 @@ spde <- inla.spde2.pcmatern(
 s_index <- inla.spde.make.index("spatial", spde$n.spde)
 
 # Projection matrix linking observations to mesh nodes
-A_matrix <- inla.spde.make.A(mesh = mesh, loc = coordinates(sdm_data_multi))
+A_matrix <- inla.spde.make.A(mesh = mesh, loc = coordinates(sdm_data_multi_filter))
 
-# --- 4. Prepare data and stack for INLA ---------------------------------------
+# --- 4. Scale covariates ---------------------------------------
 # Extract attribute table from spatial object
-sdm_df <- sdm_data_multi@data
+sdm_df <- sdm_data_multi_filter@data
 
 # Scale covariates and rename trait variable for clarity
 sdm_df <- sdm_df %>%
@@ -183,9 +262,27 @@ stack <- inla.stack(
 #Lo que se modela es que cada especie tiene su propia relación entre Bottom temp y presencia 
 #permite que algunas especies reaccionen más fuerte a la temperatura y otras menos
 #no se impone la misma pendiente a todas 
-
+# 
 # formula_trait <- presence ~ BotTemp_s + Depth_s + mean_length_s +
 #   f(Species, model = "iid") +
+#   f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
+#     BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
+#     model = "iid") + #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
+#   f(Year, model = "iid") +
+#   f(spatial, model = spde)
+
+##TRADUCCION ECOLÓGICA: Cada especie tiene su propia respuesta a la temperatura de fondo 
+#Respondemos a las preguntas de: cómo cambia la prob de presencia de cada especie con la temp de fondo
+#todas reaccionan igual a la temperatura o algunas son más sensibles?
+#qué especies aumentan o disminuyen su presencia con respecto a la temp?
+#OJO!!!! ATENCION 
+
+#al añadir mean_length, estamos tratando de entender si influye la longitud media de los 
+#individuos en la probabilidad de presencia de la especie, de manera INDEPENDIENTE al efecto ambiental 
+
+# formula_trait_alternativa <- presence ~ BotTemp_s * mean_length_s + 
+#   Depth_s + mean_length_s +
+#   f(Species, model = "iid")  +
 #   f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
 #     BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
 #     model = "iid", #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
@@ -194,45 +291,8 @@ stack <- inla.stack(
 #   f(Year, model = "iid") +
 #   f(spatial, model = spde)
 
-
-
-formula_trait <- presence ~ BotTemp_s + Depth_s + mean_length_s +
-  f(Species, model = "iid") +
-  f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
-    BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
-    model = "iid") + #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
-  f(Year, model = "iid") +
-  f(spatial, model = spde)
-
-##TRADUCCION ECOLÓGICA: Cada especie tiene su propia respuesta a la temperatura de fondo 
-#Respondemos a las preguntas de: cómo cambia la prob de presencia de cada especie con la temp de fondo
-#todas reaccionan igual a la temperatura o algunas son más sensibles?
-#qué especies aumentan o disminuyen su presencia con respecto a la temp?
-#OJO!!!! ATENCION 
-
-#al añadir mean_length, estamos tratando de entender si influye la longitud media de los 
-#individuos en la probabilidad de presencia de la especie, de manera INDEPENDIENTE al efecto ambiental 
-
-formula_trait_alternativa <- presence ~ BotTemp_s * mean_length_s + Depth_s + mean_length_s +
-  f(Species, model = "iid")  +
-  f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
-    BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
-    model = "iid", #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
-    group = temp_slope_id, #la variable aleatoria se replica por grupo, cada especie tiene su propia pendiente
-    control.group = list(model = "iid")) + #la interpretación entre grupos se modela
-  f(Year, model = "iid") +
-  f(spatial, model = spde)
-
-##TRADUCCION ECOLÓGICA: Cada especie tiene su propia respuesta a la temperatura de fondo 
-#Respondemos a las preguntas de: cómo cambia la prob de presencia de cada especie con la temp de fondo
-#todas reaccionan igual a la temperatura o algunas son más sensibles?
-#qué especies aumentan o disminuyen su presencia con respecto a la temp?
-#OJO!!!! ATENCION 
-
-#al añadir mean_length, estamos tratando de entender si influye la longitud media de los 
-#individuos en la probabilidad de presencia de la especie, de manera INDEPENDIENTE al efecto ambiental 
-
-formula_trait_alternativa <- presence ~ BotTemp_s * mean_length_s + Depth_s + mean_length_s +
+formula_trait_alternativa <- presence ~ BotTemp_s * mean_length_s + 
+  Depth_s +
   f(Species, model = "iid")  +
   f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
     BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
@@ -245,6 +305,16 @@ formula_no_trait <- presence ~ BotTemp_s + Depth_s +
   f(Species, model = "iid") +
   f(Year, model = "iid") +
   f(spatial, model = spde)
+
+# Define formula trait WITHOSPATIAL
+
+formula <- presence ~ BotTemp_s * mean_length_s + 
+  Depth_s +
+  f(Species, model = "iid")  +
+  f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
+    BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
+    model = "iid") + #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
+  f(Year, model = "iid") 
 
 
 # --- 6. fit models---------------------------------------
@@ -273,12 +343,30 @@ model_nt <- inla(
   control.compute = list(dic = TRUE, waic = TRUE)
 )
 
-# --- 7. Compare model fits ----------------------------------------------------
-comparison <- tibble::tibble(
-  Model = c("Spatial_NoTrait", "Spatial_Maria1", "SpatialLola2"),
-  DIC   = c(model_nt$dic$dic, model_maria1$dic$dic, model_lola2$dic$dic),
-  WAIC  = c(model_nt$waic$waic, model_maria1$waic$waic, model_lola2$waic$waic)
+model_nsp <- inla(
+  formula,
+  family = "binomial",
+  data = inla.stack.data(stack),
+  control.predictor = list(A = inla.stack.A(stack), compute = TRUE, link = 1),
+  control.compute = list(dic = TRUE, waic = TRUE)
 )
+
+model_nsp$dic$dic
+model_nsp$waic$waic
+
+# --- 7. Compare model fits ----------------------------------------------------
+
+comparison <- tibble::tibble(
+  Model = c("Spatial_NoTrait", "Spatial_Maria1", "SpatialLola2", "Model4"),
+  DIC   = c(model_nt$dic$dic, model_maria1$dic$dic, model_lola2$dic$dic, model_nsp$dic$dic),
+  WAIC  = c(model_nt$waic$waic, model_maria1$waic$waic, model_lola2$waic$waic, model_nsp$waic$waic)
+)
+
+comparison <- comparison %>%
+  mutate(
+    DIC  = formatC(DIC, format = "f", digits = 2),
+    WAIC = formatC(WAIC, format = "f", digits = 2)
+  )
 
 print(comparison)
 
@@ -291,16 +379,18 @@ idx_est <- inla.stack.index(stack, tag = "est")$data
 preds <- sdm_df %>%
   mutate(
     pred_nt    = model_nt$summary.fitted.values$mean[idx_est],
-    pred_trait = model_trait$summary.fitted.values$mean[idx_est]
+    pred_trait = model_lola2$summary.fitted.values$mean[idx_est],
+    pred_trait_np = model_nsp$summary.fitted.values$mean[idx_est]
   )
 
 # Compute ROC and AUC
 roc_trait <- roc(preds$presence, preds$pred_trait)
 roc_nt    <- roc(preds$presence, preds$pred_nt)
+roc_trait_np    <- roc(preds$presence, preds$pred_trait_np)
 
 roc_vals <- tibble::tibble(
-  Model = c("Spatial_NoTrait", "Spatial_WithTrait"),
-  AUC   = c(auc(roc_nt), auc(roc_trait))
+  Model = c("Spatial_NoTrait", "Spatial_WithTrait", "NonSpatial_WithTrait"),
+  AUC   = c(auc(roc_nt), auc(roc_trait), auc(roc_trait_np))
 )
 
 print(roc_vals)
@@ -320,6 +410,7 @@ df_nt_multiReal <- expand.grid(
   mutate(value = as.vector(field_nt)) %>%
   filter(!is.na(value))      # <- ELIMINA NAs
 
+
 df_traitMaria1_multiReal <- expand.grid(
   x = projr$x,
   y = projr$y
@@ -337,87 +428,68 @@ df_traitlola2_multiReal <- expand.grid(
 #No traits
 spatialfield_nt <- ggplot(df_nt_multiReal, aes(x, y, fill = value)) +
   geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  geom_text_contour(
-    aes(z = value),
-    stroke = 0.15,
-    size = 3,
-    skip = 0      # <- etiqueta TODAS las líneas
-  ) +
   scale_fill_distiller(
     palette = "RdBu",
     direction = -1,
-    name = "Mean"
+    name = "Spatial effect"
   ) +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "black", fill = "black") + 
   coord_fixed(xlim = c(-12, -1), ylim = c(40, 46)) +
   labs(
-    title = "(a) Without trait",
     x = "Longitude",
     y = "Latitude"
   ) +
-  theme_classic()
+  theme_classic()+
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 12),  
+    axis.text.y = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12))
 
-#With trait
-spatialfield_maria1  <- ggplot(df_traitMaria1_multiReal, aes(x, y, fill = value)) +
-  geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  geom_text_contour(
-    aes(z = value),
-    stroke = 0.15,
-    size = 3,
-    skip = 0      # <- etiqueta TODAS las líneas
-  ) +
-  scale_fill_distiller(
-    palette = "RdBu",
-    direction = -1,
-    name = "Mean"
-  ) +
-  geom_map(data=world, map = world, aes(long, lat, map_id = region),
-           color = "black", fill = "black") + 
-  coord_fixed(xlim = c(-12, -1), ylim = c(40, 46)) +
-  labs(
-    title = "(b) With trait",
-    x = "Longitude",
-    y = "Latitude"
-  ) +
-  theme_classic()
 
 spatialfield_lola2  <- ggplot(df_traitlola2_multiReal, aes(x, y, fill = value)) +
   geom_raster() +
-  geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  geom_text_contour(
-    aes(z = value),
-    stroke = 0.15,
-    size = 3,
-    skip = 0      # <- etiqueta TODAS las líneas
-  ) +
   scale_fill_distiller(
     palette = "RdBu",
     direction = -1,
-    name = "Mean"
+    name = "Spatial effect"
   ) +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "black", fill = "black") + 
   coord_fixed(xlim = c(-12, -1), ylim = c(40, 46)) +
   labs(
-    title = "(b) With trait",
     x = "Longitude",
     y = "Latitude"
   ) +
-  theme_classic()
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 12),  
+    axis.text.y = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12))
 
-windows();(spatialfield_nt | spatialfield_maria1 | spatialfield_lola2)
+(spatialfield_nt | spatialfield_lola2)
 
-windows();(spatialfield_nt | spatialfield_maria1 )
+combination <- (spatialfield_nt | spatialfield_lola2)
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/multi_realcase.png",
+  plot =combination,
+  width = 972,    # ancho en píxeles
+  height = 380,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 
 # --- 13.Plot: Trait-Modulated Thermal Response across Species with Labels-------------------------------------------------
 
 # Extract posterior means and 95% CI of species-specific temperature slopes
 
-slopes <- model_maria1$summary.random$temp_slope_id %>%
+slopes <- model_lola2$summary.random$temp_slope_id %>%
   as_tibble() %>%
   rename(
     SpeciesID  = ID,
@@ -490,36 +562,89 @@ slopes_with_trait <- slopes_with_trait %>%
   mutate(Species = factor(Species, levels = Species))
 
 
-windows()
 ggplot(slopes_with_trait, 
        aes(x = mean_slope, 
            y = Species,
-           color = mean_length)) +
-  
-  # Intervalos horizontales (error bars)
+           color = (mean_length/10))) +
   geom_errorbar(aes(xmin = lower, xmax = upper),
                 orientation = "y",
                 width = 0,
                 linewidth = 1) +
-  
-  # Punto central
-  geom_point(size = 3) +
-  
-  # Línea en cero para interpretar el cambio de signo
+  geom_point(size = 5) +
   geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.4, color = "red") +
-  
-  # Paleta de color continua accesible
-  scale_color_paletteer_c("viridis::turbo", name = "Mean length (cm)") +
-  
+  scale_color_paletteer_c("viridis::magma", name = "Mean length (cm)") +
   labs(
     x = "Temperature effect (slope)",
-    y = "Species",
-    title = "Species-Specific Sensitivity to Bottom Temperature"
+    y = "Species"
   ) +
   
-  theme_minimal(base_size = 13) +
+  theme_classic() +
   theme(
     legend.position = "right",
     panel.grid.minor = element_blank(),
-    panel.grid.major.y = element_blank()
-  )
+    panel.grid.major.y = element_blank(),
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(face = "bold", size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 14))
+
+
+
+library(RColorBrewer)
+
+colors_div <- brewer.pal(n = 8, name = "Spectral")
+
+thermal_slope <- ggplot(slopes_with_trait, 
+       aes(x = mean_slope, 
+           y = Species,
+           color = (mean_length/10))) +
+  geom_errorbar(aes(xmin = lower, xmax = upper),
+                orientation = "y",
+                width = 0,
+                linewidth = 1) +
+  geom_point(size = 5) +
+  geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.4, color = "red") +
+  #scale_color_paletteer_c("viridis::magma", name = "Mean length (cm)") +
+  scale_color_distiller(
+    palette = "Spectral",
+    name = "Mean length (cm)"
+  ) +
+  labs(
+    x = "Temperature effect (slope)",
+    y = "Species"
+  ) +
+  
+  theme_classic() +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(face = "bold", size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 14))
+
+thermal_slope
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/thermal_slope_real.png",
+  plot = thermal_slope,
+  width = 859,    # ancho en píxeles
+  height = 523,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
+
+
+
+
+

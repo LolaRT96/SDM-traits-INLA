@@ -21,9 +21,9 @@ ca_all <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProje
 
 # --- 2. Identify Merluccius merluccius records --------------------------------
 # Use c = 126484 for M. merluccius
-# target_spec <- 126484
-target_spec <- 126439 #micromessistius poutaasou
-
+target_spec <- 126484 # M. merluccius
+# target_spec <- 126439 #micromessistius poutaasou
+# target_spec <- 127146 #L. boscii
 
 # presence_df: one row per haul where merluccius was caught
 presence_df <- ca_all %>%
@@ -50,7 +50,10 @@ all_hauls <- hh_all %>%
   distinct(Year, Survey, StNo, HaulNo)
 
 sdm_base <- all_hauls %>%
-  left_join(presence_df, by = c("Year","Survey","StNo","HaulNo")) %>%
+  left_join(
+    presence_df %>% mutate(Year = as.integer(Year)), 
+    by = c("Year","Survey","StNo","HaulNo")
+  ) %>%
   mutate(presence = if_else(is.na(presence), 0L, 1L))
 
 glimpse(sdm_base)
@@ -93,7 +96,7 @@ sdm_data <- sdm_base %>%
 
 # --- 5. Add FishBase functional traits ----------------------------------------
 
-fb_traits <- species("Micromessitius poutassou",
+fb_traits <- species("Merluccius merluccius",
                      fields = c("Species", "Length", "Weight",
                                 "LongevityWild", "Vulnerability",
                                 "DepthRangeShallow", "DepthRangeDeep",
@@ -114,7 +117,7 @@ sdm_data <- sdm_data %>%
 #       `FB_max_length_cm` is the species‐level trait from FishBase.
 
 # --- 6. Save final dataset ----------------------------------------------------
-saveRDS(sdm_data, file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_micpot.rds")
+saveRDS(sdm_data, file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluc.rds")
 
 # --- 7. Quick summary ----------------------------------------------------------
 message("Final SDM dataset for M. merluccius:")

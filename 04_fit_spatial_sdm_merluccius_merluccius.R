@@ -33,11 +33,19 @@ library(rnaturalearthhires)
 library(INLAspacetime)
 library(inlabru)
 library(patchwork)
+library(showtext)
+library(sysfonts)
+library(writexl)
+
+font_add("Helvetica", 
+         regular = "C:/Users/mdolores.riesgo/Downloads/helvetica-255/Helvetica.ttf")
+showtext_auto()
+
 
 
 # --- 1. Load prepared SDM data ------------------------------------------------
 
-sdm_data <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluza.rds")
+sdm_data <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluc.rds")
 glimpse(sdm_data)
 sdm_data$Survey <- factor(sdm_data$Survey)
 levels(sdm_data$Survey)
@@ -47,9 +55,24 @@ levels(sdm_data$Survey)
 
 # --- 2. Scale covariates and define variables --------------------------------
 
-df <- sdm_data %>%
+summary(sdm_data)
+
+#Limpiar
+df_clean <- sdm_data %>%
   mutate(
-    mean_len_s = as.numeric(scale(mean_length_mm)),        # observed mean haul length
+    BotTemp = na_if(BotTemp, -9),
+    BotSal  = na_if(BotSal,  -9)
+  )
+
+summary(df_clean$BotTemp)
+summary(df_clean$mean_length_mm)
+df_clean$mean_length_cm <- df_clean$mean_length_mm /10
+summary(df_clean$mean_length_cm)
+summary(df_clean)
+
+df <- df_clean %>%
+  mutate(
+    mean_len_s = as.numeric(scale(mean_length_cm)),        # observed mean haul length
     Depth_s    = as.numeric(scale(Depth)),                  # bottom depth
     BotTemp_s  = as.numeric(scale(BotTemp)),                # bottom temperature
     BotSal_s   = as.numeric(scale(BotSal)),                 # bottom salinity
@@ -57,11 +80,8 @@ df <- sdm_data %>%
     year_f     = as.factor(Year)  # Ensure year is factor
   )
 
-summary(sdm_data)
 
-summary(df) 
-
-ggplot(df, aes(x= year_f, y = mean_length_mm))+
+ggplot(df, aes(x= year_f, y = mean_length_cm))+
   geom_boxplot()+
   theme_minimal()
 
@@ -82,38 +102,66 @@ ggplot(df, aes(x = ShootLong, y = ShootLat, color = BotTemp)) +
     title = "Spatial distribution of bottom temperature"
   )
 
-#Limpiar
-df_clean <- df %>%
-  mutate(
-    BotTemp = na_if(BotTemp, -9),
-    BotSal  = na_if(BotSal,  -9)
+ggplot(df, aes(x = ShootLong, y = ShootLat, color = mean_length_cm)) +
+  geom_point(size = 1.8, alpha = 0.7) +
+  scale_color_viridis_c(name = "Mean Length cm", na.value = "grey80") +
+  coord_equal() +
+  theme_classic() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    title = "Spatial distribution of bottom temperature"
   )
 
-summary(df_clean$BotTemp)
-summary(df_clean$mean_length_mm)
-df_clean$mean_length_cm <- df_clean$mean_length_mm /10
-summary(df_clean$mean_length_cm)
 
-vars_to_scale <- c("mean_len_s", "Depth_s", "BotTemp_s", "BotSal_s")
 
-df_1 <- df_clean %>%
-  filter(if_all(all_of(vars_to_scale), ~ . >= -3.3 & . <= 3.3))
+# Mapa con puntos de muestreo
+p_surveys_map <- ggplot() +
+  geom_point(data = sdm_data, 
+             aes(x = ShootLong, y = ShootLat, color = Survey, shape = Survey),
+             alpha = 0.7, size = 2) +
+  scale_color_manual(values = c("PT-IBTS" = "darkorange", "SP-NORTH" = "steelblue")) +
+  scale_shape_manual(values = c("PT-IBTS" = 16, "SP-NORTH" = 17)) +
+  geom_map(data=world, map = world, aes(long, lat, map_id = region),
+           color = "black", fill = "gray95") + 
+  coord_fixed(xlim = c(-13, -1), ylim = c(35, 46)) +
+  labs(x = "Longitude", y = "Latitude", 
+       color = "Survey", shape = "Survey") +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "right"
+  )
 
-summary(df_1)
+p_surveys_map
+
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/p_surveys_map.png",
+  plot = p_surveys_map,
+  width = 901,    # ancho en píxeles
+  height = 461,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
 
 # --- 3. Check collinearity and select environmental covariates ---------------
 
-cov_env <- df %>% select(Depth_s, BotTemp_s, BotSal_s)
-cor_env <- cor(cov_env, use = "complete.obs")
-print(cor_env)
-
-# Define fixed effect sets
-fixed_no_trait  <- c("BotTemp_s", "Depth_s")
-fixed_with_trait <- c("BotTemp_s", "Depth_s", "mean_len_s")
+# cov_env <- df %>% select(Depth_s, BotTemp_s, BotSal_s)
+# cor_env <- cor(cov_env, use = "complete.obs")
+# print(cor_env)
+# 
+# # Define fixed effect sets
+# fixed_no_trait  <- c("BotTemp_s", "Depth_s")
+# fixed_with_trait <- c("BotTemp_s", "Depth_s", "mean_len_s")
 
 # --- 5.2 Build triangulation mesh 
 
-loc <- cbind(df_1$ShootLong, df_1$ShootLat)
+loc <- cbind(df$ShootLong, df$ShootLat)
 loc <- as.data.frame(loc)
 colnames(loc) <- c("ShootLong", "ShootLat")
 coordinates(loc) <- ~ShootLong + ShootLat
@@ -126,80 +174,83 @@ mesh <- inla.mesh.2d(
   cutoff   = 0.1
 )
 
-plot(mesh);points(df_1, col = "red", pch = 16, cex = 0.5)
+plot(mesh)
+points(df$ShootLong, df$ShootLat,
+       col = "red", pch = 16, cex = 0.5)
 
 mesh$n
 
 # --- 6. Define PC priors for SPDE and select best ------------------------------
 
-df_1 <- as.data.frame(df_1)
-
-spde_options <- list(
-  loose = inla.spde2.pcmatern(mesh, alpha = 2,
-                              prior.range = c(1, 0.01), prior.sigma = c(1, 0.01)),
-  tight = inla.spde2.pcmatern(mesh, alpha = 2,
-                              prior.range = c(0.5, 0.05), prior.sigma = c(0.5, 0.05))
-)
-
-
-fit_spatial <- function(spde_model, covariates, df) {
-  
-  idx <- inla.spde.make.index("spatial.field", spde_model$n.spde)
-  
-  coords <- as.matrix(df[, c("ShootLong", "ShootLat")])
-  
-  A <- inla.spde.make.A(mesh, loc = coords)
-  
-  df_cov <- df %>% 
-    mutate(time_f = as.factor(year_f)) %>%
-    select(all_of(covariates), year_f)
-  
-  stk <- inla.stack(
-    data = list(presence = df$presence),
-    A = list(A, 1),
-    effects = list(
-      spatial.field = idx,
-      data = df_cov
-    ),
-    tag = "est"
-  )
-  
-  formula <- as.formula(paste(
-    "presence ~", 
-    paste(c(covariates, "f(year_f, model = 'iid')"), collapse = " + "),
-    "+ f(spatial.field, model = spde_model)"
-  ))
-  
-  res <- inla(
-    formula,
-    family = "binomial",
-    data = inla.stack.data(stk),
-    control.predictor = list(A = inla.stack.A(stk), compute = TRUE),
-    control.compute = list(dic = TRUE, waic = TRUE)
-  )
-  
-  list(model = res, stack = stk)
-}
-
-
-results <- lapply(
-  spde_options, 
-  fit_spatial, 
-  covariates = fixed_with_trait,
-  df = df_1
-)
-
-
-# Compare DIC for priors
-for (nm in names(results)) {
-  m <- results[[nm]]$model
-  cat(sprintf("%-6s DIC = %8.2f, WAIC = %8.2f\n", nm, m$dic$dic, m$waic$waic))
-}
-
-best_prior <- names(results)[which.min(sapply(results, function(x) x$model$dic$dic))]
-message("Selected SPDE prior: ", best_prior)
-spatial_with_trait <- results[[best_prior]]$model
-stk_with_trait     <- results[[best_prior]]$stack
+# df_1 <- as.data.frame(df_1)
+# 
+# spde_options <- list(
+#   loose = inla.spde2.pcmatern(mesh, alpha = 2,
+#                               prior.range = c(1, 0.01), prior.sigma = c(1, 0.01)),
+#   tight = inla.spde2.pcmatern(mesh, alpha = 2,
+#                               prior.range = c(0.5, 0.05), prior.sigma = c(0.5, 0.05))
+# )
+# 
+# 
+# fit_spatial <- function(spde_model, covariates, df) {
+#   
+#   idx <- inla.spde.make.index("spatial.field", spde_model$n.spde)
+#   
+#   coords <- as.matrix(df[, c("ShootLong", "ShootLat")])
+#   
+#   A <- inla.spde.make.A(mesh, loc = coords)
+#   
+#   df_cov <- df %>% 
+#     mutate(time_f = as.factor(year_f)) %>%
+#     select(all_of(covariates), year_f)
+#   
+#   stk <- inla.stack(
+#     data = list(presence = df$presence),
+#     A = list(A, 1),
+#     effects = list(
+#       spatial.field = idx,
+#       data = df_cov
+#     ),
+#     tag = "est"
+#   )
+#   
+#   formula <- as.formula(paste(
+#     "presence ~", 
+#     paste(c(covariates, "f(year_f, model = 'iid')"), collapse = " + "),
+#     "+ f(spatial.field, model = spde_model)"
+#   ))
+#   
+#   res <- inla(
+#     formula,
+#     family = "binomial",
+#     data = inla.stack.data(stk),
+#     control.predictor = list(A = inla.stack.A(stk), compute = TRUE),
+#     control.compute = list(dic = TRUE, waic = TRUE)
+#   )
+#   
+#   list(model = res, stack = stk)
+# }
+# 
+# 
+# results <- lapply(
+#   spde_options, 
+#   fit_spatial, 
+#   covariates = fixed_with_trait,
+#   df = df_1
+# )
+# 
+# 
+# # Compare DIC for priors
+# for (nm in names(results)) {
+#   m <- results[[nm]]$model
+#   cat(sprintf("%-6s DIC = %8.2f, WAIC = %8.2f\n", nm, m$dic$dic, m$waic$waic))
+# }
+# 
+# best_prior <- names(results)[which.min(sapply(results, function(x) x$model$dic$dic))]
+# message("Selected SPDE prior: ", best_prior)
+# 
+# spatial_with_trait <- results[[best_prior]]$model
+# stk_with_trait     <- results[[best_prior]]$stack
 
 ##BEST PRIOR IS TIGHT 
 
@@ -207,21 +258,6 @@ stk_with_trait     <- results[[best_prior]]$stack
 #                     prior.range = c(0.5, 0.05), prior.sigma = c(0.5, 0.05)
 
 # --- 7a. Fit spatial model WITH trait --------------------------------------
-
-coordinates(df_1) <- ~ShootLong + ShootLat
-proj4string(df_1) <- CRS("+proj=longlat +datum=WGS84")
-coords <- coordinates(df_1)
-
-mesh <- inla.mesh.2d(
-  loc      = coords,
-  max.edge = c(0.5, 2),
-  cutoff   = 0.1
-)
-plot(mesh);points(df_1, col = "red", pch = 16, cex = 0.5)
-
-mesh$n
-
-df_1 <- as.data.frame(df_1)
 
 spde <- inla.spde2.pcmatern(mesh, alpha = 2,
                     prior.range = c(0.5, 0.05), prior.sigma = c(0.5, 0.05))
@@ -233,11 +269,11 @@ A <- inla.spde.make.A(mesh, coords)
 
 #Define stack
 stack.1 <- inla.stack(
-  data   = list(y = df_1$pres),
+  data   = list(y = df$presence),
   A      = list(A, 1),
   effects = list(
     s.index,  
-    df_1 %>% transmute(
+    df %>% transmute(
       intercept = 1,
       Depth_s, BotTemp_s, mean_len_s, year_f
     )
@@ -293,7 +329,7 @@ spatial_without_trait$waic$waic
 f.3 <- y ~ -1 +intercept + Depth_s + BotTemp_s + 
   f(year_f, model = 'iid')
 
-model_ns_bas <- inla(
+NoSpatial_NoTrait <- inla(
   f.3,
   data              = inla.stack.data(stack.1),
   family            = "binomial",
@@ -305,14 +341,11 @@ model_ns_bas <- inla(
   verbose           = TRUE
 )
 
-model_ns_bas$dic$dic
-model_ns_bas$waic$waic
-
 f.4 <- y ~ -1 +intercept + Depth_s + BotTemp_s + mean_len_s +
   BotTemp_s:mean_len_s + 
   f(year_f, model = 'iid')  
 
-model_ns_trait <- inla(
+model_nspatial_withtrait <- inla(
   f.4,
   data              = inla.stack.data(stack.1),
   family            = "binomial",
@@ -329,19 +362,26 @@ model_ns_trait <- inla(
 comparison <- tibble::tibble(
   Model = c("Spatial_NoTrait", "Spatial_WithTrait", "NonSpatial_NoTrait", "NonSpatial_WithTrait"),
   DIC   = c(spatial_without_trait$dic$dic, spatial_with_trait$dic$dic,
-            model_ns_bas$dic$dic,      model_ns_trait$dic$dic),
+            NoSpatial_NoTrait$dic$dic,      model_nspatial_withtrait$dic$dic),
   WAIC  = c(spatial_without_trait$waic$waic, spatial_with_trait$waic$waic,
-            model_ns_bas$waic$waic,      model_ns_trait$waic$waic)
+            NoSpatial_NoTrait$waic$waic,      model_nspatial_withtrait$waic$waic)
 )
 
+comparison <- comparison %>%
+  mutate(
+    DIC  = formatC(DIC, format = "f", digits = 2),
+    WAIC = formatC(WAIC, format = "f", digits = 2)
+  )
+
 print(comparison)
+
 
 # --- 9. Calculate and compare ROC/AUC -----------------------------------------
 
 idx <- inla.stack.index(stack.1, "fit")$data
 
-pred_ns_nt <- model_ns_bas$summary.fitted.values[idx, "mean"]
-pred_ns_tr <- model_ns_trait$summary.fitted.values[idx, "mean"]
+pred_ns_nt <- NoSpatial_NoTrait$summary.fitted.values[idx, "mean"]
+pred_ns_tr <- model_nspatial_withtrait$summary.fitted.values[idx, "mean"]
 pred_sp_nt <- spatial_without_trait$summary.fitted.values[idx, "mean"]
 pred_sp_tr <- spatial_with_trait$summary.fitted.values[idx, "mean"]
 
@@ -353,13 +393,15 @@ preds <- df %>%
     pred_sp_tr = pred_sp_tr
   )
 
+colnames(preds)
+
 roc_vals <- tibble::tibble(
   Model = comparison$Model,
   AUC   = c(
-    auc(roc(preds$pres, preds$pred_sp_nt)),
-    auc(roc(preds$pres, preds$pred_sp_tr)),
-    auc(roc(preds$pres, preds$pred_ns_nt)),
-    auc(roc(preds$pres, preds$pred_ns_tr))
+    auc(roc(preds$presence, preds$pred_sp_nt)),
+    auc(roc(preds$presence, preds$pred_sp_tr)),
+    auc(roc(preds$presence, preds$pred_ns_nt)),
+    auc(roc(preds$presence, preds$pred_ns_tr))
   )
 )
 
@@ -390,25 +432,14 @@ df_wt_merluccius <- expand.grid(
   filter(!is.na(value))      # <- ELIMINA NAs
 
 
-df_nt_crop_merl <- df_nt_merluccius |>
-  dplyr::filter(
-    between(x, -13.88, 1.35),
-    between(y, 39.36, 54.45)
-  )
-
-df_wt_crop_merl <- df_wt_merluccius |>
-  dplyr::filter(
-    between(x, -13.88, 1.35),
-    between(y, 39.36, 54.45)
-  )
-
-p_nt_merluccius <- ggplot(df_nt_crop_merl, aes(x, y, fill = value)) +
+p_nt_merluccius <- ggplot(df_nt_merluccius, aes(x, y, fill = value)) +
    geom_tile() +
   labs(x = "Longitude", y = "Latitude", fill = "Spatial effect") +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
-           color = "black", fill = "black") + 
-  coord_fixed(xlim = c(-13.88, 1.35), ylim = c(40, 55)) +
+           color = "gray", fill = "black") + 
+  coord_fixed(xlim = c(-13, -1), ylim = c(35, 46)) +
+  scale_x_continuous(breaks = seq(-13, -1, by = 2)) +
   theme_classic()+
   theme(
     text = element_text(family = "Helvetica"),
@@ -417,14 +448,64 @@ p_nt_merluccius <- ggplot(df_nt_crop_merl, aes(x, y, fill = value)) +
     axis.text = element_text(size = 12),
     axis.title = element_text(size = 12))
 
-p_wt_merluccius <-ggplot(df_wt_crop_merl, aes(x, y, fill = value)) +
+p_wt_merluccius <-ggplot(df_wt_merluccius, aes(x, y, fill = value)) +
   geom_tile() +
   labs(x = "Longitude", y = "Latitude", fill = "Spatial effect") +
   # geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
   scale_fill_distiller(palette = "RdBu", direction = -1) +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
-           color = "black", fill = "black") + 
-  coord_fixed(xlim = c(-13.88, 1.35), ylim = c(40, 55)) +
+           color = "gray", fill = "black") + 
+  coord_fixed(xlim = c(-13, -1), ylim = c(35, 46)) +
+  scale_x_continuous(breaks = seq(-13, -1, by = 2)) +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 12),  
+    axis.text.y = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12))
+
+combination <- (p_nt_merluccius | p_wt_merluccius)
+
+ggsave(
+ filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/merluccius.png",
+ plot =combination,
+ width = 972,    # ancho en píxeles
+ height = 380,   # alto en píxeles
+ units = "px",
+ dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
+#Maps differences
+
+df_both <- df_nt_merluccius%>%
+  inner_join(
+    df_wt_merluccius,
+    by = c("x", "y"),
+    suffix = c("_nt", "_wt")
+  )
+
+df_both <- df_both %>% 
+  rename( value_nt = value_nt,
+          value_wt = value_wt)
+
+head(df_both)
+
+df_both$diff <- df_both$value_nt - df_both$value_wt
+head(df_both)
+df_both$sim <- -abs(df_both$diff)
+head(df_both)
+
+
+p_diff_merluccius <-ggplot(df_both, aes(x, y, fill = diff)) +
+  geom_tile() +
+  labs(x = "Longitude", y = "Latitude", fill = "Difference") +
+  # geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
+  scale_fill_viridis_c(option = "magma", direction = -1) +
+  geom_map(data=world, map = world, aes(long, lat, map_id = region),
+           color = "gray", fill = "black") + 
+  coord_fixed(xlim = c(-13, -1), ylim = c(35, 46)) +
+  scale_x_continuous(breaks = seq(-13, -1, by = 2)) +
   theme_classic() +
   theme(
     text = element_text(family = "Helvetica"),
@@ -434,129 +515,57 @@ p_wt_merluccius <-ggplot(df_wt_crop_merl, aes(x, y, fill = value)) +
     axis.title = element_text(size = 12))
 
 
-(p_nt_merluccius | p_wt_merluccius)
+p_sim <-ggplot(df_both, aes(x, y, fill = sim)) +
+  geom_raster() +
+  scale_fill_gradient2(
+    midpoint = 0,
+    low = "red",
+    mid = "white",
+    high = "blue",
+    name = "Similarity"
+  ) +
+  labs(x = "Longitude", y = "Latitude", fill = "Difference") +
+  geom_map(data=world, map = world, aes(long, lat, map_id = region),
+           color = "gray", fill = "black") + 
+  coord_fixed(xlim = c(-13, -1), ylim = c(35, 46)) +
+  scale_x_continuous(breaks = seq(-13, -1, by = 2)) +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 12),  
+    axis.text.y = element_text(size = 12),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 12))
 
-# 1. Collect your models in a named list
-models_merluccius <- list(
-  Spatial_NoTrait_merluccius      = spatial_no_trait,
-  Spatial_WithTrait_merluccius    = spatial_with_trait,
-  NonSpatial_NoTrait_merluccius   = model_ns_base,
-  NonSpatial_WithTrait_merluccius = model_ns_trait
+p_sim
+
+combination_merluccius <- (p_wt_merluccius | p_sim)
+
+combination_merluccius
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/combination_merluccius.png",
+  plot = combination_merluccius,
+  width = 972,    # ancho en píxeles
+  height = 380,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
 )
 
-saveRDS(
-  models_merluccius,
-  file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/output/models_SIMULATED.rds"
-)
-
-
+# # Collect Models in a list
+# models_merluccius <- list(
+#   Spatial_NoTrait_merluccius      = spatial_no_trait,
+#   Spatial_WithTrait_merluccius    = spatial_with_trait,
+#   NonSpatial_NoTrait_merluccius   = model_ns_base,
+#   NonSpatial_WithTrait_merluccius = model_ns_trait
+# )
+# 
+# saveRDS(
+#   models_merluccius,
+#   file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/output/models_SIMULATED.rds"
+# )
 
 # EXPLORACIÓN DEL MEJOR MODELO  -------------------------------------------
-
-
-#Relación de la temperatura y la longitud media 
-
-spatial_with_trait$summary.fixed
-
-temp_seq <- seq(min(df_1$BotTemp_s), max(df_1$BotTemp_s), length.out = 50)
-length_seq <- seq(
-  min(df_1$mean_len_s, na.rm = TRUE),
-  max(df_1$mean_len_s, na.rm = TRUE),
-  length.out = 50
-)
-
-grid <- expand.grid(BotTemp_s = temp_seq, mean_len_s = length_seq)
-grid$intercept <- 1
-grid$Depth_s <- mean(df_1$Depth_s)   # fijar otras variables en su media
-
-X <- model.matrix(~ -1 + intercept +Depth_s + BotTemp_s + mean_len_s + BotTemp_s:mean_len_s, data = grid)
-beta <- spatial_with_trait$summary.fixed$mean
-grid$eta <- as.vector(X %*% beta)
-grid$prob <- 1 / (1 + exp(-grid$eta))  # probabilidad binomial
-
-
-
-
-
-
-ggplot(grid, aes(x = BotTemp_s, y = mean_len_s, fill = prob)) +
-  geom_tile() +
-  scale_fill_viridis_c(option = "magma") +
-  labs(x = "Bottom Temperature (°C)", y = "Mean body size (cm)", fill = "Probability of presence") +
-  scale_x_continuous(expand = c(0, 0)) +
-  scale_y_continuous(expand = c(0, 0)) +
-  theme_classic() +
-  theme(
-    text = element_text(family = "Helvetica"),
-    axis.text.x = element_text(size = 12),  
-    axis.text.y = element_text(size = 12),
-    axis.text = element_text(size = 12),
-    axis.title = element_text(size = 12),
-    legend.position = "bottom",
-    axis.line = element_line(color = "black", linewidth = 0.4),
-    axis.ticks = element_line(color = "black", linewidth = 0.3),
-    strip.background = element_blank(),
-    strip.text = element_text(face = "bold", size = 12)
-  )
-
-##Valores desescalados
-
-df$temp_s <- (df$BotTemp_s - mean(df$BotTemp_s)) / sd(df$BotTemp_s)
-
-df$length_cm_s <- (df$mean_length_cm - mean(df$mean_length_cm)) / sd(df$mean_length_cm)
-
-mean_temp <- mean(df$BotTemp_s)
-sd_temp   <- sd(df$BotTemp_s)
-
-mean_length <- mean(df$mean_length_cm, na.rm = TRUE)
-sd_length   <- sd(df$mean_length_cm, na.rm = TRUE)
-
-temp_orig_seq <- seq(min(df$BotTemp_s), max(df$BotTemp_s), length.out = 50)
-length_orig_seq <- seq(min(df$mean_length_cm, na.rm = TRUE), max(df$mean_length_cm, na.rm = TRUE), length.out = 50)
-
-grid_orig <- expand.grid(
-  temp = temp_orig_seq,
-  length_cm = length_orig_seq)
-
-
-grid_orig$temp_s <- (grid_orig$temp - mean_temp) / sd_temp
-
-grid_orig$length_cm_s <- (grid_orig$length_cm - mean_length) / sd_length
-
-grid_orig$intercept <- 1
-
-grid_orig$bathy_s <- mean(df$Depth_s)  
-
-X <- model.matrix(~ -1 + intercept + bathy_s + temp_s + length_cm_s + temp_s:length_cm_s, data = grid_orig)
-beta <- spatial_with_trait$summary.fixed$mean
-grid_orig$eta <- as.vector(X %*% beta)
-
-grid_orig$prob <- 1 / (1 + exp(-grid_orig$eta))
-
-ggplot(grid_orig, aes(x = temp, y = length_cm, fill = prob)) +
-  geom_tile() +
-  scale_fill_viridis_c(option = "magma") +
-  labs(x = "Bottom Temperature (°C)", y = "Mean body size (cm)", fill = "Probability of presence") +
-  scale_x_continuous(expand = c(0, 0)) +
-  scale_y_continuous(expand = c(0, 0)) +
-  theme_classic() +
-  theme(
-    text = element_text(family = "Helvetica"),
-    axis.text.x = element_text(size = 12),  
-    axis.text.y = element_text(size = 12),
-    axis.text = element_text(size = 12),
-    axis.title = element_text(size = 12),
-    legend.position = "bottom",
-    axis.line = element_line(color = "black", linewidth = 0.4),
-    axis.ticks = element_line(color = "black", linewidth = 0.3),
-    strip.background = element_blank(),
-    strip.text = element_text(face = "bold", size = 12)
-  )
-
-
-
-
-
 
 #Distribución de las marginales 
 
@@ -586,3 +595,71 @@ ggplot(marginals_combined, aes(x = x, y = y)) +
     strip.text = element_text(face = "bold"),
     panel.grid.minor = element_blank()
   )
+
+
+temp_mean  <- mean(df$BotTemp, na.rm = TRUE)
+temp_sd    <- sd(df$BotTemp, na.rm = TRUE)
+len_mean   <- mean(df$mean_length_cm, na.rm = TRUE)
+len_sd     <- sd(df$mean_length_cm, na.rm = TRUE)
+temp_seq_orig <- seq(min(df$BotTemp, na.rm = TRUE),
+max(df$BotTemp, na.rm = TRUE),
+length.out = 50)
+length_seq_orig <- seq(min(df$mean_length_cm, na.rm = TRUE),
+max(df$mean_length_cm, na.rm = TRUE),
+length.out = 50)
+temp_seq_s  <- (temp_seq_orig  - temp_mean) / temp_sd
+length_seq_s <- (length_seq_orig - len_mean) / len_sd
+grid <- expand.grid(
+BotTemp = temp_seq_orig,
+mean_len = length_seq_orig
+)
+# añadir versiones escaladas para predicción
+grid$BotTemp_s  <- (grid$BotTemp  - temp_mean) / temp_sd
+grid$mean_len_s <- (grid$mean_len - len_mean) / len_sd
+grid$intercept <- 1
+grid$Depth_s   <- mean(df$Depth_s, na.rm = TRUE)
+X <- model.matrix(~ -1 + intercept + Depth_s +
+BotTemp_s + mean_len_s +
+BotTemp_s:mean_len_s,
+data = grid)
+beta <- spatial_with_trait$summary.fixed$mean
+grid$eta  <- as.vector(X %*% beta)
+grid$prob <- 1 / (1 + exp(-grid$eta))
+
+probability_length <- ggplot(grid, aes(x = BotTemp, y = mean_len, fill = prob)) +
+ geom_tile() +
+ scale_fill_viridis_c(option = "magma") +
+ labs(x = "Bottom Temperature (°C)",
+ y = "Mean body size (cm)",
+ fill = "Presence probability") +
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  theme_classic() +
+  theme(
+    text = element_text(family = "Helvetica"),
+    axis.text.x = element_text(size = 14),  
+    axis.text.y = element_text(size = 14),
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    legend.position = "right",
+    axis.line = element_line(color = "black", linewidth = 0.4),
+    axis.ticks = element_line(color = "black", linewidth = 0.3),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 14)
+  )
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/probability.png",
+  plot = probability_length,
+  width = 647,    # ancho en píxeles
+  height = 457,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
+df_fixed <- as.data.frame(spatial_with_trait$summary.fixed)
+df_fixed$Parameter <- rownames(df_fixed)
+
+write.xlsx(df_fixed,
+           file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/summary_fixed.xlsx",
+           rowNames = FALSE)
