@@ -1,7 +1,7 @@
 
 # -----------------------------
 # Title: Download and Harmonize ICES DATRAS HH and CA Data
-# Authors: M.Grazia Pennino
+# Authors: M.Grazia Pennino & M. D. Riesgo
 # Date: 2025-07-04
 #
 # Description:
@@ -26,7 +26,8 @@ library(icesVocab)
 # -----------------------------
 # STEP 1. Define surveys and years
 # -----------------------------
-surveys <- c("SP-NORTH", "PT-IBTS")  # Additional surveys like "SP-ARSA" can be added later
+surveys <- c("SP-NORTH", "PT-IBTS")  
+# Additional surveys like "SP-ARSA" can be added later
 years <- 2010:2022
 quarter <- 1:4  # All quarters
 
@@ -84,8 +85,8 @@ ca_all <- map_df(surveys, function(survey) {
 # -----------------------------
 # STEP 6. Save combined datasets to disk
 # -----------------------------
-saveRDS(hh_all, file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/hh_all.rds")
-saveRDS(ca_all, file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/ca_all.rds")
+# saveRDS(hh_all, file = "~/SDMs_Traits/data/hh_all.rds")
+# saveRDS(ca_all, file = "~/SDMs_Traits/data/ca_all.rds")
 
 message("✅ DATRAS HH and CA data successfully downloaded and saved.")
 
@@ -160,8 +161,8 @@ species_full_years_named <- species_full_years %>%
 head(species_full_years_named)
 
 # Save to file
-write.csv(species_full_years_named, 
-          "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/species_full_years_named.csv", 
-          row.names = FALSE)
+# write.csv(species_full_years_named, 
+#           ~/SDMs_Traits/data/species_full_years_named.csv", 
+#           row.names = FALSE)
 
 

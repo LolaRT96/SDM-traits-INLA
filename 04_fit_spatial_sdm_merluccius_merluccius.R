@@ -1,6 +1,6 @@
 # ==============================================================================
 # Title: Fit Spatial SDMs for Merluccius merluccius With and Without Trait (INLA + SPDE)
-# Author: M. Grazia Pennino (MODIFIED BY LOLA RIESGO)
+# Author: M. Grazia Pennino & M.D. Riesgo
 # Description:
 #   - Load prepared SDM data (haul-level mean_length_cm and FishBase max length)
 #   - Scale covariates and check for collinearity
@@ -38,14 +38,14 @@ library(sysfonts)
 library(writexl)
 
 font_add("Helvetica", 
-         regular = "C:/Users/mdolores.riesgo/Downloads/helvetica-255/Helvetica.ttf")
+         regular = "~/Downloads/helvetica-255/Helvetica.ttf")
 showtext_auto()
 
 
 
 # --- 1. Load prepared SDM data ------------------------------------------------
 
-sdm_data <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluc.rds")
+sdm_data <- readRDS("~/SDMs_Traits/data/sdm_data_merluc.rds")
 glimpse(sdm_data)
 sdm_data$Survey <- factor(sdm_data$Survey)
 levels(sdm_data$Survey)
@@ -114,8 +114,6 @@ ggplot(df, aes(x = ShootLong, y = ShootLat, color = mean_length_cm)) +
   )
 
 
-
-# Mapa con puntos de muestreo
 p_surveys_map <- ggplot() +
   geom_point(data = sdm_data, 
              aes(x = ShootLong, y = ShootLat, color = Survey, shape = Survey),
@@ -137,16 +135,6 @@ p_surveys_map <- ggplot() +
   )
 
 p_surveys_map
-
-
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/p_surveys_map.png",
-  plot = p_surveys_map,
-  width = 901,    # ancho en píxeles
-  height = 461,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
 
 
 # --- 3. Check collinearity and select environmental covariates ---------------
@@ -467,15 +455,6 @@ p_wt_merluccius <-ggplot(df_wt_merluccius, aes(x, y, fill = value)) +
 
 combination <- (p_nt_merluccius | p_wt_merluccius)
 
-ggsave(
- filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/merluccius.png",
- plot =combination,
- width = 972,    # ancho en píxeles
- height = 380,   # alto en píxeles
- units = "px",
- dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
-
 #Maps differences
 
 df_both <- df_nt_merluccius%>%
@@ -539,18 +518,6 @@ p_sim <-ggplot(df_both, aes(x, y, fill = sim)) +
 
 p_sim
 
-combination_merluccius <- (p_wt_merluccius | p_sim)
-
-combination_merluccius
-
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/combination_merluccius.png",
-  plot = combination_merluccius,
-  width = 972,    # ancho en píxeles
-  height = 380,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
 
 # # Collect Models in a list
 # models_merluccius <- list(
@@ -562,12 +529,11 @@ ggsave(
 # 
 # saveRDS(
 #   models_merluccius,
-#   file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/output/models_SIMULATED.rds"
+#   file = "~/SDMs_Traits/output/models_SIMULATED.rds"
 # )
 
-# EXPLORACIÓN DEL MEJOR MODELO  -------------------------------------------
+# best model exploration  -------------------------------------------
 
-#Distribución de las marginales 
 
 marginals_fixed <- spatial_with_trait$marginals.fixed
 
@@ -648,18 +614,10 @@ probability_length <- ggplot(grid, aes(x = BotTemp, y = mean_len, fill = prob)) 
     strip.text = element_text(face = "bold", size = 14)
   )
 
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/probability.png",
-  plot = probability_length,
-  width = 647,    # ancho en píxeles
-  height = 457,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
 
 df_fixed <- as.data.frame(spatial_with_trait$summary.fixed)
 df_fixed$Parameter <- rownames(df_fixed)
 
 write.xlsx(df_fixed,
-           file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/summary_fixed.xlsx",
+           file = "~SDMs_Traits/summary_fixed.xlsx",
            rowNames = FALSE)

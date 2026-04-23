@@ -1,8 +1,10 @@
 
 # ==============================================================================
 # Title: Fit Spatial SDMs for Multispecies Assemblage With and Without Trait (INLA + SPDE)
-# Author: M. Grazia Pennino
+# Author: M. Grazia Pennino & M.D. Riesgo
+
 # Date:   2025-07-14
+
 # Description:
 #   - Load cleaned multispecies SDM dataset from ICES DATRAS (presence–absence, mean length)
 #   - Filter extreme values, temperature outliers, and rare species (< 30 presences)
@@ -32,14 +34,14 @@ library(showtext)
 library(sysfonts)
 
 font_add("Helvetica", 
-         regular = "C:/Users/mdolores.riesgo/Downloads/helvetica-255/Helvetica.ttf")
+         regular = "~/Downloads/helvetica-255/Helvetica.ttf")
 showtext_auto()
 
 #dir.create("plots/empirical_multi", recursive = TRUE, showWarnings = FALSE)
 
 # --- 2. Load cleaned SDM dataset ----------------------------------------------
 
-sdm_data_multi <-  readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_multispecies_clean.rds")
+sdm_data_multi <-  readRDS("~/SDMs_Traits/data/sdm_multispecies_clean.rds")
 
 # --- 3. Apply data quality filters --------------------------------------------
 # To ensure model robustness and remove artifacts or extreme values, we apply the following filters:
@@ -112,15 +114,6 @@ ggplot(sdm_data_multi, aes(x=Depth, y = mean_length))+
   theme_classic() +
   facet_wrap(~Species) 
 
-media_por_especie <- sdm_data_multi %>%
-  group_by(Species) %>%
-  summarise(
-    mean_length = mean(mean_length, na.rm = TRUE),
-    mean_BotTem = mean(BotTemp, na.rm = TRUE),
-    n           = n()
-  )
-
-media_por_especie
 
 ggplot(sdm_data_multi, aes(x = ShootLong, y = ShootLat, color = BotTemp)) +
   geom_point(size = 1.8, alpha = 0.7) +
@@ -176,15 +169,6 @@ p_surveys_multi <- ggplot() +
     legend.position = "right"
   )
 
-p_surveys_multi
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/p_surveys_multi.png",
-  plot = p_surveys_multi,
-  width = 901,    # ancho en píxeles
-  height = 397,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
 
 # --- 3. Create SPDE mesh and model --------------------------------------------
 # Convert coordinates to spatial format
@@ -258,40 +242,8 @@ stack <- inla.stack(
   tag = "est"
 )
 
-# Define formula WITH trait-modulated slope for temperature
-#Lo que se modela es que cada especie tiene su propia relación entre Bottom temp y presencia 
-#permite que algunas especies reaccionen más fuerte a la temperatura y otras menos
-#no se impone la misma pendiente a todas 
-# 
-# formula_trait <- presence ~ BotTemp_s + Depth_s + mean_length_s +
-#   f(Species, model = "iid") +
-#   f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
-#     BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
-#     model = "iid") + #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
-#   f(Year, model = "iid") +
-#   f(spatial, model = spde)
 
-##TRADUCCION ECOLÓGICA: Cada especie tiene su propia respuesta a la temperatura de fondo 
-#Respondemos a las preguntas de: cómo cambia la prob de presencia de cada especie con la temp de fondo
-#todas reaccionan igual a la temperatura o algunas son más sensibles?
-#qué especies aumentan o disminuyen su presencia con respecto a la temp?
-#OJO!!!! ATENCION 
-
-#al añadir mean_length, estamos tratando de entender si influye la longitud media de los 
-#individuos en la probabilidad de presencia de la especie, de manera INDEPENDIENTE al efecto ambiental 
-
-# formula_trait_alternativa <- presence ~ BotTemp_s * mean_length_s + 
-#   Depth_s + mean_length_s +
-#   f(Species, model = "iid")  +
-#   f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
-#     BotTemp_s, #covariable con la que se va a relacionar, la pendiente de la temperatura
-#     model = "iid", #cada especie tiene un efecto indedependiente de pendiente (slopes diferentes)
-#     group = temp_slope_id, #la variable aleatoria se replica por grupo, cada especie tiene su propia pendiente
-#     control.group = list(model = "iid")) + #la interpretación entre grupos se modela
-#   f(Year, model = "iid") +
-#   f(spatial, model = spde)
-
-formula_trait_alternativa <- presence ~ BotTemp_s * mean_length_s + 
+formula_trait <- presence ~ BotTemp_s * mean_length_s + 
   Depth_s +
   f(Species, model = "iid")  +
   f(temp_slope_id, #indice de los niveles del efecto aleatorio (identifica cada especie)
@@ -307,7 +259,6 @@ formula_no_trait <- presence ~ BotTemp_s + Depth_s +
   f(spatial, model = spde)
 
 # Define formula trait WITHOSPATIAL
-
 formula <- presence ~ BotTemp_s * mean_length_s + 
   Depth_s +
   f(Species, model = "iid")  +
@@ -319,16 +270,9 @@ formula <- presence ~ BotTemp_s * mean_length_s +
 
 # --- 6. fit models---------------------------------------
 
-model_maria1 <- inla(
-  formula_trait,
-  family = "binomial",
-  data = inla.stack.data(stack),
-  control.predictor = list(A = inla.stack.A(stack), compute = TRUE, link = 1),
-  control.compute = list(dic = TRUE, waic = TRUE)
-)
 
-model_lola2 <- inla(
-  formula_trait_alternativa,
+model <- inla(
+  formula_trait,
   family = "binomial",
   data = inla.stack.data(stack),
   control.predictor = list(A = inla.stack.A(stack), compute = TRUE, link = 1),
@@ -357,9 +301,9 @@ model_nsp$waic$waic
 # --- 7. Compare model fits ----------------------------------------------------
 
 comparison <- tibble::tibble(
-  Model = c("Spatial_NoTrait", "Spatial_Maria1", "SpatialLola2", "Model4"),
-  DIC   = c(model_nt$dic$dic, model_maria1$dic$dic, model_lola2$dic$dic, model_nsp$dic$dic),
-  WAIC  = c(model_nt$waic$waic, model_maria1$waic$waic, model_lola2$waic$waic, model_nsp$waic$waic)
+  Model = c("Spatial_NoTrait", "Spatial", "Model_nsp"),
+  DIC   = c(model_nt$dic$dic,  model$dic$dic, model_nsp$dic$dic),
+  WAIC  = c(model_nt$waic$waic,  model$waic$waic, model_nsp$waic$waic)
 )
 
 comparison <- comparison %>%
@@ -399,8 +343,7 @@ print(roc_vals)
 # --- 11. Plot spatial fields --------------------------------------------------
 # Create projection grid over mesh
 projr <- inla.mesh.projector(mesh, dims = c(200, 200))
-field_maria <- inla.mesh.project(projr, model_maria1$summary.random$spatial$mean)
-field_lola <- inla.mesh.project(projr, model_lola2$summary.random$spatial$mean)
+field <- inla.mesh.project(projr, model$summary.random$spatial$mean)
 field_nt <- inla.mesh.project(projr, model_nt$summary.random$spatial$mean)
 
 df_nt_multiReal <- expand.grid(
@@ -411,18 +354,11 @@ df_nt_multiReal <- expand.grid(
   filter(!is.na(value))      # <- ELIMINA NAs
 
 
-df_traitMaria1_multiReal <- expand.grid(
+df_trait_multiReal <- expand.grid(
   x = projr$x,
   y = projr$y
 ) %>%
-  mutate(value = as.vector(field_maria)) %>%
-  filter(!is.na(value))      # <- ELIMINA NAs
-
-df_traitlola2_multiReal <- expand.grid(
-  x = projr$x,
-  y = projr$y
-) %>%
-  mutate(value = as.vector(field_lola)) %>%
+  mutate(value = as.vector(field)) %>%
   filter(!is.na(value))      
 
 #No traits
@@ -449,7 +385,7 @@ spatialfield_nt <- ggplot(df_nt_multiReal, aes(x, y, fill = value)) +
     axis.title = element_text(size = 12))
 
 
-spatialfield_lola2  <- ggplot(df_traitlola2_multiReal, aes(x, y, fill = value)) +
+spatialfield <- ggplot(df_trait_multiReal, aes(x, y, fill = value)) +
   geom_raster() +
   scale_fill_distiller(
     palette = "RdBu",
@@ -471,25 +407,16 @@ spatialfield_lola2  <- ggplot(df_traitlola2_multiReal, aes(x, y, fill = value)) 
     axis.text = element_text(size = 12),
     axis.title = element_text(size = 12))
 
-(spatialfield_nt | spatialfield_lola2)
+(spatialfield_nt | spatialfield)
 
-combination <- (spatialfield_nt | spatialfield_lola2)
-
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/multi_realcase.png",
-  plot =combination,
-  width = 972,    # ancho en píxeles
-  height = 380,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
+combination <- (spatialfield_nt | spatialfield)
 
 
 # --- 13.Plot: Trait-Modulated Thermal Response across Species with Labels-------------------------------------------------
 
 # Extract posterior means and 95% CI of species-specific temperature slopes
 
-slopes <- model_lola2$summary.random$temp_slope_id %>%
+slopes <- model$summary.random$temp_slope_id %>%
   as_tibble() %>%
   rename(
     SpeciesID  = ID,
@@ -527,23 +454,6 @@ plot_slope <- ggplot(slopes_with_trait, aes(x = mean_length, y = mean_slope)) +
 
 plot_slope
 
-
-###############OTRA FORMA DE PLOTEAR 
-
-library(ggplot2)
-library(ggrepel)
-library(dplyr)
-library(paletteer)
-
-slopes_species <- model_maria1$summary.random$temp_slope_id %>%
-  as_tibble() %>%
-  group_by(ID) %>%                
-  summarise(
-    SpeciesID  = unique(ID),
-    mean_slope = mean(mean),
-    lower      = mean(`0.025quant`),
-    upper      = mean(`0.975quant`)
-  )
 
 trait_table <- sdm_df %>%
   group_by(Species) %>%
@@ -593,7 +503,6 @@ ggplot(slopes_with_trait,
     legend.text  = element_text(size = 14))
 
 
-
 library(RColorBrewer)
 
 colors_div <- brewer.pal(n = 8, name = "Spectral")
@@ -633,15 +542,6 @@ thermal_slope <- ggplot(slopes_with_trait,
     legend.text  = element_text(size = 14))
 
 thermal_slope
-
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/thermal_slope_real.png",
-  plot = thermal_slope,
-  width = 859,    # ancho en píxeles
-  height = 523,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
 
 
 

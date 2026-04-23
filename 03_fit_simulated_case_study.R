@@ -1,6 +1,7 @@
 # ==============================================================================
 # Title: Fit Spatial SDMs for Simulated Data With and Without Trait (INLA + SPDE)
-# Author: M. Grazia Pennino MODIFIED BY LOLA RIESGO)
+# Author: M. Grazia Pennino & M.D. Riesgo
+
 # Description:
 #   - Simulate SDM-like data with trait and spatial coordinates
 #   - Scale covariates and check for collinearity
@@ -33,27 +34,12 @@ library(showtext)
 library(sysfonts)
 
 font_add("Helvetica", 
-         regular = "C:/Users/mdolores.riesgo/Downloads/helvetica-255/Helvetica.ttf")
+         regular = "~/Downloads/helvetica-255/Helvetica.ttf")
 showtext_auto()
 
 
 # --- 1. Simulate SDM-like data ------------------------------------------------
 
-#Código de Maria 
-
-# df <- tibble::tibble(
-#   presence = rbinom(n, 1, 0.5),
-#   ShootLong = runif(n, -10, 10),
-#   ShootLat  = runif(n, 35, 45),
-#   Depth     = rnorm(n, 200, 50),
-#   BotTemp   = rnorm(n, 12, 2),
-#   BotSal    = rnorm(n, 35, 1),
-#   mean_length_cm     = rnorm(n, 25, 5),
-#   FB_max_length_cm   = rnorm(n, 50, 10),
-#   Year      = sample(2015:2022, n, replace = TRUE)
-# )
-
-#Mi propuesta 
 
 set.seed(123)
 
@@ -138,16 +124,6 @@ p_bathy <- ggplot(grid_bathy_df, aes(x =x, y = y, fill = bathy)) +
 
 p_bathy
 
-
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/bathy.png",
-  plot = p_bathy,
-  width = 1016,    # ancho en píxeles
-  height = 393,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
-
 # Bottom temperature ---------------------------------------------------------
 
 # Anomalías temporales suaves
@@ -200,16 +176,6 @@ p_temp <- ggplot(grid_temp_df, aes(x = x, y = y, fill = temp)) +
 
 p_temp 
 
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/p_temp.png",
-  plot = p_temp,
-  width = 1016,    # ancho en píxeles
-  height = 393,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
-
-
 temp_time_df <- grid_temp_df %>%
   group_by(time) %>%
   summarise(temp_mean = mean(temp), 
@@ -217,7 +183,6 @@ temp_time_df <- grid_temp_df %>%
   mutate(temp_upper = temp_mean + temp_sd,
          temp_lower = temp_mean - temp_sd)
 
-# Gráfico de variación temporal
 p_temp_time <- ggplot(temp_time_df, aes(x = time, y = temp_mean)) +
   geom_line(color = "steelblue", size = 1) +
   labs(x = "Time (unit)", y = "Mean Temp (°C)")+
@@ -230,20 +195,10 @@ p_temp_time <- ggplot(temp_time_df, aes(x = time, y = temp_mean)) +
 
 p_temp_time
 
-
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/p_temp_time.png",
-  plot = p_temp_time,
-  width = 682,    # ancho en píxeles
-  height = 393,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
-
 # Bottom salinity ---------------------------------------------------------
 
 sal_from_temp <- function(temp) {
-  # Relación lineal aproximada: aguas frías (~5°C) = 35 PSU, aguas templadas (~17°C) = 34 PSU
+  
   35 - (temp - 5) * (2 / 12)
 }
 
@@ -253,16 +208,15 @@ for (t in seq_len(n_time)) {
   
   loc_df <- grid_temp_df %>% filter(time == t)
   
-  # Salinidad base a partir de temperatura
+  # 
   loc_df$sal <- sal_from_temp(loc_df$temp) +
-    rnorm(nrow(loc_df), mean = 0, sd = 0.1)  # pequeño ruido espacial
+    rnorm(nrow(loc_df), mean = 0, sd = 0.1)  
   
   grid_sal_list[[t]] <- loc_df
 }
 
 grid_sal_df <- bind_rows(grid_sal_list)
 
-# Visualización de salinidad
 ggplot(grid_sal_df, aes(x = x, y = y, fill = sal)) +
   geom_tile() +
   facet_wrap(~time, ncol = 3) +
@@ -466,7 +420,6 @@ with_seed(456, {
 df_muestra <- bind_rows(df_muestreo_list)
 
 #Body size vary with temp and depth
-#NOTE: Here, temp has 12 times more effect over the length than the cov depth
 
 df_muestra <- df_muestra %>%
   mutate(
@@ -848,16 +801,8 @@ p_wt <-ggplot(df_wt, aes(x, y, fill = value)) +
 
 combination <- (p_nt | p_wt)
 
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/simulation.png",
-  plot = combination,
-  width = 972,    # ancho en píxeles
-  height = 380,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
 
-#Diferencia entre mapas 
+#Differences
 
 df_both <- df_nt %>%
 inner_join(
@@ -911,19 +856,6 @@ p_sim <-ggplot(df_sim, aes(x, y, fill = sim)) +
 p_sim
 
 
-combination2 <- (p_wt | p_sim)
-
-combination2
-
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/simulation2.png",
-  plot = combination2,
-  width = 972,    # ancho en píxeles
-  height = 380,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
-
 
 # 11. Save the models
 
@@ -936,14 +868,14 @@ models_SIMULATED <- list(
 
 saveRDS(
   models_SIMULATED,
-  file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/output/models_SIMULATED.rds"
+  file = "~/SDMs_Traits/output/models_SIMULATED.rds"
 )
 
-##Exploracion de la interaccion temperatra 
+##Exploration interaction temp and body size 
+
 spatial_with_trait$summary.fixed
 spatial_no_trait$summary.fixed
 
-# Crear grid de valores de temp y length
 temp_seq <- seq(min(df$temp_s), max(df$temp_s), length.out = 50)
 length_seq <- seq(min(df$length_cm_s), max(df$length_cm_s), length.out = 50)
 
@@ -1004,13 +936,3 @@ prob_len <- ggplot(grid_orig, aes(x = temp, y = length_cm, fill = prob)) +
     strip.background = element_blank(),
     strip.text = element_text(face = "bold", size = 14)
   )
-
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/probability_simulated.png",
-  plot = prob_len,
-  width = 647,    # ancho en píxeles
-  height = 457,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
-

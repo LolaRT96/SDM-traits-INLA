@@ -1,6 +1,6 @@
 # ==============================================================================
 # Title: Simulated Multispecies Spatial SDM with Trait-Modulated Response (INLA)
-# Author: M. Grazia Pennino
+# Author: M. Grazia Pennino & M.D. Riesgo
 # Date: 2025-07-15
 # Description:
 #   - Simulate multispecies presence–absence data with trait-modulated temperature effects
@@ -26,7 +26,7 @@ library(showtext)
 library(sysfonts)
 
 font_add("Helvetica", 
-         regular = "C:/Users/mdolores.riesgo/Downloads/helvetica-255/Helvetica.ttf")
+         regular = "~/Downloads/helvetica-255/Helvetica.ttf")
 showtext_auto()
 
 # --- 2. Simulate spatial domain and mesh -------------------------------------
@@ -166,7 +166,7 @@ summary_length_spp
 
 summary_length_spp <- as.data.frame(summary_length_spp)
 write.xlsx(summary_length_spp,
-           file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/summary_length_spp.xlsx",
+           file = "~/SDMs_Traits/summary_length_spp.xlsx",
            rowNames = FALSE)
 
 
@@ -398,14 +398,6 @@ windows();(p_nt_multiSimu | p_wt_multiSimu)
 
 combination <- (p_nt_multiSimu | p_wt_multiSimu)
 
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/simulation_multi.png",
-  plot = combination,
-  width = 972,    # ancho en píxeles
-  height = 380,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
 
 # --- 9. Trait vs slope relationship -------------------------------------------
 
@@ -433,10 +425,6 @@ ggplot(slope_trait, aes(x = trait, y = slope_mean)) +
        title = "Trait-Modulated Thermal Response") +
   theme_minimal()
 
-library(ggplot2)
-library(ggrepel)
-library(dplyr)
-library(paletteer)
 
 slopes_species <- model_trait$summary.random$species_slope_id %>%
   as_tibble() %>%
@@ -515,12 +503,4 @@ thermal_slope <- ggplot(slopes_with_trait,
     legend.title = element_text(size = 14),
     legend.text  = element_text(size = 14)
   )
-
-ggsave(
-  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/thermal_slope_sim.png",
-  plot = thermal_slope,
-  width = 567,    # ancho en píxeles
-  height = 426,   # alto en píxeles
-  units = "px",
-  dpi = 72        # dpi estándar para píxeles (72 dpi)
-)
+thermal_slope 

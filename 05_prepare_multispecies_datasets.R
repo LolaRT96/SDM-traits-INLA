@@ -1,5 +1,7 @@
 # ======================================================================
 # Title: Multispecies Spatial SDM with Trait-Modulated Response (INLA)
+# Authors: M. G pennino & M.D. Riesgo
+
 # Description: Prepares multi-species ICES DATRAS data using SpecCode translation,
 #              calculates mean observed length per haul and species,
 #              and prepares data for hierarchical SDM modeling.

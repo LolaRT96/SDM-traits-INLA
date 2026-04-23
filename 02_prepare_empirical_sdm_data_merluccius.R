@@ -1,6 +1,6 @@
 # ==============================================================================
 # Title: Data Preparation for Empirical SDM – Merluccius merluccius with FishBase Traits
-# Author: M. Grazia Pennino
+# Author: M. Grazia Pennino & M. D Riesgo
 # Date:   2025-07-08
 # Description:
 #   - Loads ICES DATRAS haul header (HH) and catch-at-age (CA) data
@@ -16,8 +16,8 @@ library(icesDatras)
 library(rfishbase)   # For FishBase trait data
 
 # --- 1. Load DATRAS data ------------------------------------------------------
-hh_all <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/hh_all.rds")    # all hauls, all species
-ca_all <- readRDS("C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/ca_all.rds")    # all catch records
+# hh_all <- readRDS("~/SDMs_Traits/data/hh_all.rds")    # all hauls, all species
+# ca_all <- readRDS("~/SDMs_Traits/data/ca_all.rds")    # all catch records
 
 # --- 2. Identify Merluccius merluccius records --------------------------------
 # Use c = 126484 for M. merluccius
@@ -68,7 +68,6 @@ covars <- hh_all %>%
          BotSal) %>%       # bottom salinity
   distinct()
 
-# Definimos las columnas clave
 key_cols <- c("Year", "Survey", "StNo", "HaulNo")
 
 sdm_data <- sdm_base %>%
@@ -117,7 +116,7 @@ sdm_data <- sdm_data %>%
 #       `FB_max_length_cm` is the species‐level trait from FishBase.
 
 # --- 6. Save final dataset ----------------------------------------------------
-saveRDS(sdm_data, file = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluc.rds")
+saveRDS(sdm_data, file = "~/SDMs_Traits/data/sdm_data_merluc.rds")
 
 # --- 7. Quick summary ----------------------------------------------------------
 message("Final SDM dataset for M. merluccius:")
