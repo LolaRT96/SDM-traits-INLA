@@ -36,6 +36,7 @@ library(patchwork)
 library(showtext)
 library(sysfonts)
 library(writexl)
+library(scico)
 
 font_add("Helvetica", 
          regular = "~/Downloads/helvetica-255/Helvetica.ttf")
@@ -45,7 +46,7 @@ showtext_auto()
 
 # --- 1. Load prepared SDM data ------------------------------------------------
 
-sdm_data <- readRDS("~/SDMs_Traits/data/sdm_data_merluc.rds")
+sdm_data <- readRDS("~/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_data_merluc.rds")
 glimpse(sdm_data)
 sdm_data$Survey <- factor(sdm_data$Survey)
 levels(sdm_data$Survey)
@@ -349,20 +350,80 @@ model_nspatial_withtrait <- inla(
 
 comparison <- tibble::tibble(
   Model = c("Spatial_NoTrait", "Spatial_WithTrait", "NonSpatial_NoTrait", "NonSpatial_WithTrait"),
-  DIC   = c(spatial_without_trait$dic$dic, spatial_with_trait$dic$dic,
-            NoSpatial_NoTrait$dic$dic,      model_nspatial_withtrait$dic$dic),
-  WAIC  = c(spatial_without_trait$waic$waic, spatial_with_trait$waic$waic,
-            NoSpatial_NoTrait$waic$waic,      model_nspatial_withtrait$waic$waic)
+  DIC   = c(spatial_without_trait$dic$dic, 
+            spatial_with_trait$dic$dic,
+            NoSpatial_NoTrait$dic$dic,      
+            model_nspatial_withtrait$dic$dic),
+  WAIC  = c(spatial_without_trait$waic$waic, 
+            spatial_with_trait$waic$waic,
+            NoSpatial_NoTrait$waic$waic,      
+            model_nspatial_withtrait$waic$waic),
+  LPML_CPO = c(
+    sum(log(spatial_without_trait$cpo$cpo), na.rm = TRUE),
+    sum(log(spatial_with_trait$cpo$cpo), na.rm = TRUE),
+    sum(log(NoSpatial_NoTrait$cpo$cpo), na.rm = TRUE),
+    sum(log(model_nspatial_withtrait$cpo$cpo), na.rm = TRUE)
+  )
 )
 
 comparison <- comparison %>%
   mutate(
     DIC  = formatC(DIC, format = "f", digits = 2),
-    WAIC = formatC(WAIC, format = "f", digits = 2)
+    WAIC = formatC(WAIC, format = "f", digits = 2),
+    LPML_CPO = formatC(LPML_CPO, format = "f", digits = 2),
   )
 
 print(comparison)
 
+# Relative contribution of traits -----------------------------------------
+
+# Baseline model
+
+dic_base  <- NoSpatial_NoTrait$dic$dic
+waic_base <- NoSpatial_NoTrait$waic$waic
+
+# Other models
+
+dic_ns_trait <- model_nspatial_withtrait$dic$dic
+dic_s_base   <- spatial_without_trait$dic$dic
+dic_s_trait  <- spatial_with_trait$dic$dic
+
+waic_ns_trait <- NoSpatial_NoTrait$waic$waic
+waic_s_base   <- spatial_without_trait$waic$waic
+waic_s_trait  <- spatial_with_trait$waic$waic
+
+# ΔDIC (improvement vs baseline)
+
+delta_dic_ns_trait <- dic_base - dic_ns_trait
+delta_dic_s_base   <- dic_base - dic_s_base
+delta_dic_s_trait  <- dic_base - dic_s_trait
+delta_dic_spatial_trait  <- dic_s_base - dic_s_trait
+
+# ΔWAIC
+
+delta_waic_ns_trait <- waic_base - waic_ns_trait
+delta_waic_s_base   <- waic_base - waic_s_base
+delta_waic_s_trait  <- waic_base - waic_s_trait
+delta_waic_spatial_trait  <- waic_s_base - waic_s_trait
+
+model_comparison <- data.frame(
+  Model = c("Baseline vs No Spatial with trait", 
+            "Baseline vs Spatial without trait", 
+            "Baseline vs Spatial with trait",
+            "Spatial without trait vs Spatial with trait"),
+  
+  dDIC  = c(delta_dic_ns_trait,
+            delta_dic_s_base,
+            delta_dic_s_trait,
+            delta_dic_spatial_trait),
+  
+  dWAIC = c(delta_waic_ns_trait,
+            delta_waic_s_base,
+            delta_waic_s_trait,
+            delta_waic_spatial_trait)
+)
+
+model_comparison
 
 # --- 9. Calculate and compare ROC/AUC -----------------------------------------
 
@@ -395,7 +456,81 @@ roc_vals <- tibble::tibble(
 
 print(roc_vals)
 
-# --- Plot combined spatial fields: F ------------------------------------
+# Plot calibration checks  -------------------------------------------------
+
+#Index of real observation samples
+idx <- inla.stack.index(stack.1, "fit")$data
+
+# Funtion for calibration
+calibration_data <- function(model, model_name, y) {
+  
+  p <- model$summary.fitted.values[idx, "mean"]
+  
+  tibble(
+    obs = y,
+    pred = p
+  ) %>%
+    mutate(bin = ntile(pred, 10)) %>%
+    group_by(bin) %>%
+    summarise(
+      pred_mean = mean(pred),
+      obs_mean  = mean(obs),
+      n = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(model = model_name)
+}
+
+cal_df <- bind_rows(
+  calibration_data(model_nt,  "Spatial_NoTrait", sdm_df$presence, idx),
+  calibration_data(model,     "Spatial",         sdm_df$presence, idx),
+  calibration_data(model_nsp, "NonSpatial",      sdm_df$presence, idx)
+)
+
+# Plot
+cal.plots <-  ggplot(cal_df,
+                     aes(x = pred_mean,
+                         y = obs_mean)) +
+  
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linetype = 2,
+    linewidth = 0.8, color = "gray"
+  ) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  facet_wrap(~ model) +
+  coord_equal() +
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor = element_line(color = "grey95", linewidth = 0.2),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  ) +
+  labs(
+    x = "Mean predicted probability",
+    y = "Observed prevalence")
+
+cal.plots
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/calplotsMultiCase_empirical.jpg",
+  plot = cal.plots,
+  width = 1484,    # ancho en píxeles
+  height = 758,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
+
+# --- Plot combined spatial fields ------------------------------------
 
 sp_means_wt <- spatial_with_trait$summary.random$spatial.field$mean
 sp_means_nt <- spatial_without_trait$summary.random$spatial.field$mean
@@ -423,7 +558,7 @@ df_wt_merluccius <- expand.grid(
 p_nt_merluccius <- ggplot(df_nt_merluccius, aes(x, y, fill = value)) +
    geom_tile() +
   labs(x = "Longitude", y = "Latitude", fill = "Spatial effect") +
-  scale_fill_distiller(palette = "RdBu", direction = -1) +
+  scale_fill_scico(palette = "vik", ,  name = "Spatial effect") +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "gray", fill = "black") + 
   coord_fixed(xlim = c(-13, -1), ylim = c(35, 46)) +
@@ -440,7 +575,7 @@ p_wt_merluccius <-ggplot(df_wt_merluccius, aes(x, y, fill = value)) +
   geom_tile() +
   labs(x = "Longitude", y = "Latitude", fill = "Spatial effect") +
   # geom_contour(aes(z = value), colour = "black", linewidth = 0.3) +
-  scale_fill_distiller(palette = "RdBu", direction = -1) +
+  scale_fill_scico(palette = "vik", ,  name = "Spatial effect") +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "gray", fill = "black") + 
   coord_fixed(xlim = c(-13, -1), ylim = c(35, 46)) +
@@ -495,15 +630,9 @@ p_diff_merluccius <-ggplot(df_both, aes(x, y, fill = diff)) +
 
 
 p_sim <-ggplot(df_both, aes(x, y, fill = sim)) +
-  geom_raster() +
-  scale_fill_gradient2(
-    midpoint = 0,
-    low = "red",
-    mid = "white",
-    high = "blue",
-    name = "Similarity"
-  ) +
-  labs(x = "Longitude", y = "Latitude", fill = "Difference") +
+  geom_raster() + 
+  scale_fill_viridis_c() +
+  labs(x = "Longitude", y = "Latitude", fill = "Similarity") +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "gray", fill = "black") + 
   coord_fixed(xlim = c(-13, -1), ylim = c(35, 46)) +
@@ -517,6 +646,19 @@ p_sim <-ggplot(df_both, aes(x, y, fill = sim)) +
     axis.title = element_text(size = 12))
 
 p_sim
+
+combination2 <- (p_wt_merluccius | p_sim)
+
+combination2
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/empiricalSingleCase_change.jpg",
+  plot = combination2,
+  width = 972,    # ancho en píxeles
+  height = 380,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 
 # # Collect Models in a list

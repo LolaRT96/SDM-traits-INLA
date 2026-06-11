@@ -32,9 +32,10 @@ library(withr)
 library(fmesher)
 library(showtext)
 library(sysfonts)
+library(scico)
 
 font_add("Helvetica", 
-         regular = "~/Downloads/helvetica-255/Helvetica.ttf")
+         regular = "C:/Users/mdolores.riesgo/Downloads/helvetica-255/Helvetica.ttf")
 showtext_auto()
 
 
@@ -329,7 +330,7 @@ beta_bathy  <- 0.05
 
 # thermal niche 
 beta_size        <- 0.6
-beta_temp_size   <- -0.08   
+beta_temp_size   <- -0.08
 beta_bathy_size <-  0.03    
 
 # ocupación
@@ -650,7 +651,8 @@ spatial_with_trait <- inla(
 # --- 7c. NO SPATIAL WITH TRAITS --------------------------------------
 
 f.3 <- y ~ -1 + intercept + bathy_s + temp_s + length_cm_s +
-  temp_s:length_cm_s 
+  temp_s:length_cm_s + 
+  f(time, model = 'iid') 
 
 model_ns_trait <- inla(
   f.3,
@@ -667,7 +669,8 @@ model_ns_trait <- inla(
 
 # --- 7c. NO SPATIAL NO TRAITS --------------------------------------
 
-f.4 <- y ~ -1 + intercept + bathy_s + temp_s 
+f.4 <- y ~ -1 + intercept + bathy_s + temp_s +
+  f(time, model = 'iid')
 
 model_ns_base <- inla(
   f.4,
@@ -688,16 +691,73 @@ comparison <- tibble::tibble(
   DIC   = c(spatial_no_trait$dic$dic, spatial_with_trait$dic$dic,
             model_ns_base$dic$dic,      model_ns_trait$dic$dic),
   WAIC  = c(spatial_no_trait$waic$waic, spatial_with_trait$waic$waic,
-            model_ns_base$waic$waic,      model_ns_trait$waic$waic)
+            model_ns_base$waic$waic,      model_ns_trait$waic$waic), 
+  LPML_CPO = c(
+    sum(log(spatial_with_trait$cpo$cpo), na.rm = TRUE),
+    sum(log(spatial_no_trait$cpo$cpo), na.rm = TRUE),
+    sum(log(model_ns_trait$cpo$cpo), na.rm = TRUE),
+    sum(log(model_ns_base$cpo$cpo), na.rm = TRUE)
+  )
 )
 
 comparison <- comparison %>%
   mutate(
     DIC  = formatC(DIC, format = "f", digits = 2),
-    WAIC = formatC(WAIC, format = "f", digits = 2)
+    WAIC = formatC(WAIC, format = "f", digits = 2),
+    LPML_CPO = formatC(LPML_CPO, format = "f", digits = 2),
   )
 
 print(comparison)
+
+# Relative contribution of traits -----------------------------------------
+
+# Baseline model
+
+dic_base  <- model_ns_base$dic$dic
+waic_base <- model_ns_base$waic$waic
+
+# Other models
+
+dic_ns_trait <- model_ns_trait$dic$dic
+dic_s_base   <- spatial_no_trait$dic$dic
+dic_s_trait  <- spatial_with_trait$dic$dic
+
+waic_ns_trait <- model_ns_trait$waic$waic
+waic_s_base   <- spatial_no_trait$waic$waic
+waic_s_trait  <- spatial_with_trait$waic$waic
+
+# ΔDIC (improvement vs baseline)
+
+delta_dic_ns_trait <- dic_base - dic_ns_trait
+delta_dic_s_base   <- dic_base - dic_s_base
+delta_dic_s_trait  <- dic_base - dic_s_trait
+delta_dic_spatial_trait  <- dic_s_base - dic_s_trait
+
+# ΔWAIC
+
+delta_waic_ns_trait <- waic_base - waic_ns_trait
+delta_waic_s_base   <- waic_base - waic_s_base
+delta_waic_s_trait  <- waic_base - waic_s_trait
+delta_waic_spatial_trait  <- waic_s_base - waic_s_trait
+
+model_comparison <- data.frame(
+  Model = c("Baseline vs No Spatial with trait", 
+            "Baseline vs Spatial without trait", 
+            "Baseline vs Spatial with trait",
+            "Spatial without trait vs Spatial with trait"),
+  
+  dDIC  = c(delta_dic_ns_trait,
+            delta_dic_s_base,
+            delta_dic_s_trait,
+            delta_dic_spatial_trait),
+  
+  dWAIC = c(delta_waic_ns_trait,
+            delta_waic_s_base,
+            delta_waic_s_trait,
+            delta_waic_spatial_trait)
+)
+
+model_comparison
 
 # --- 9. Calculate and compare ROC/AUC -----------------------------------------
 
@@ -727,6 +787,96 @@ roc_vals <- tibble::tibble(
 )
 
 print(roc_vals)
+
+# Plot calibration checks  -------------------------------------------------
+
+#Index of real observation samples
+idx <- inla.stack.index(stack.1, "fit")$data
+
+# Funtion for calibration
+calibration_data <- function(model, model_name, y) {
+  
+  p <- model$summary.fitted.values[idx, "mean"]
+  
+  tibble(
+    obs = y,
+    pred = p
+  ) %>%
+    mutate(bin = ntile(pred, 10)) %>%
+    group_by(bin) %>%
+    summarise(
+      pred_mean = mean(pred),
+      obs_mean  = mean(obs),
+      n = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(model = model_name)
+}
+
+cal_df <- bind_rows(
+  calibration_data(
+    spatial_with_trait,
+    "Spatial, with trait",
+    df$pres
+  ),
+  calibration_data(
+    spatial_no_trait,
+    "Spatial, no trait",
+    df$pres
+  ),
+  calibration_data(
+    model_ns_trait,
+    "No spatial, with trait",
+    df$pres
+  ),
+  calibration_data(
+    model_ns_base,
+    "No spatial, no trait",
+    df$pres
+  )
+)
+
+# Plot
+cal.plots <-  ggplot(cal_df,
+       aes(x = pred_mean,
+           y = obs_mean)) +
+  
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linetype = 2,
+    linewidth = 0.8, color = "gray"
+  ) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  facet_wrap(~ model) +
+  coord_equal() +
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor = element_line(color = "grey95", linewidth = 0.2),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  ) +
+  labs(
+    x = "Mean predicted probability",
+    y = "Observed prevalence")
+
+cal.plots
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/calplots.jpg",
+  plot = cal.plots,
+  width = 1484,    # ancho en píxeles
+  height = 758,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 # --- 10. Plot combined spatial field with and without trait --------------------
 
@@ -764,7 +914,8 @@ df_wt <- expand.grid(
 
 p_nt <-ggplot(df_nt, aes(x, y, fill = value)) +
   geom_raster() +
-  scale_fill_distiller(palette = "RdBu", direction = -1,  name = "Spatial effect") +
+  #scale_fill_distiller(palette = "RdBu", direction = -1,  name = "Spatial effect") +
+  scale_fill_scico(palette = "vik", ,  name = "Spatial effect") +
   xlim(0,100) + ylim(0,100)+
   coord_equal(expand = FALSE) +
   theme_classic() +
@@ -780,10 +931,9 @@ p_nt <-ggplot(df_nt, aes(x, y, fill = value)) +
     strip.text        = element_text(face = "bold", size = 12)  
   )
 
-
 p_wt <-ggplot(df_wt, aes(x, y, fill = value)) +
   geom_raster() +
-  scale_fill_distiller(palette = "RdBu", direction = -1,  name = "Spatial effect") +
+  scale_fill_scico(palette = "vik",  name = "Spatial effect") +
   coord_equal(expand = FALSE) +
   xlim(0,100) + ylim(0,100)+
   theme_classic() +
@@ -801,6 +951,7 @@ p_wt <-ggplot(df_wt, aes(x, y, fill = value)) +
 
 combination <- (p_nt | p_wt)
 
+combination
 
 #Differences
 
@@ -833,13 +984,7 @@ p_sim <-ggplot(df_sim, aes(x, y, fill = sim)) +
   geom_raster() +
   coord_equal(expand = FALSE) +
   xlim(0,100) + ylim(0,100) +
-  scale_fill_gradient2(
-    midpoint = 0,
-    low = "red",
-    mid = "white",
-    high = "blue",
-    name = "Similarity"
-  ) +
+    scale_fill_viridis(name = "Similarity")+
   theme_classic() +
   theme( 
     text = element_text(family = "Helvetica"),
@@ -855,6 +1000,19 @@ p_sim <-ggplot(df_sim, aes(x, y, fill = sim)) +
 
 p_sim
 
+
+combination2 <- (p_wt | p_sim)
+
+combination2
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/simulationSingleCase_change.jpg",
+  plot = combination2,
+  width = 972,    # ancho en píxeles
+  height = 380,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 
 # 11. Save the models

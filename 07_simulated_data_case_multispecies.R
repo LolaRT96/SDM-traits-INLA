@@ -165,10 +165,10 @@ summary_length_spp <- sim_df %>%
 summary_length_spp
 
 summary_length_spp <- as.data.frame(summary_length_spp)
-write.xlsx(summary_length_spp,
-           file = "~/SDMs_Traits/summary_length_spp.xlsx",
-           rowNames = FALSE)
-
+# write.xlsx(summary_length_spp,
+#            file = "~/SDMs_Traits/summary_length_spp.xlsx",
+#            rowNames = FALSE)
+# 
 
 ggplot(sim_pres, aes(x = x, y = y,
                      color = trait,
@@ -263,33 +263,43 @@ formula_trait_Nospatial <- presence ~ -1 + temp_s * trait_s + depth_s +
 model_nt <- inla(formula_nt, family = "binomial",
                  data = inla.stack.data(stack),
                  control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
-                 control.compute = list(dic = TRUE, waic = TRUE),
+                 control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE),
                  verbose = TRUE)
 
 model_trait <- inla(formula_trait, family = "binomial",
                      data = inla.stack.data(stack),
                      control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
-                     control.compute = list(dic = TRUE, waic = TRUE),
+                     control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE),
                      verbose = TRUE)
 
 model_trait_Nospatial <- inla(formula_trait_Nospatial, family = "binomial",
                      data = inla.stack.data(stack),
                      control.predictor = list(A = inla.stack.A(stack), compute = TRUE),
-                     control.compute = list(dic = TRUE, waic = TRUE),
+                     control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE),
                      verbose = TRUE)
 
 #Compare model fits
 
 comparison <- tibble::tibble(
   Model = c("Spatial_NoTrait", "Spatial_Trait", "NonSpatial_Trait"),
-  DIC   = c(model_nt$dic$dic, model_trait$dic$dic, model_trait_Nospatial$dic$dic),
-  WAIC  = c(model_nt$waic$waic, model_trait$waic$waic, model_trait_Nospatial$waic$waic)
+  DIC   = c(model_nt$dic$dic,
+            model_trait$dic$dic, 
+            model_trait_Nospatial$dic$dic),
+  WAIC  = c(model_nt$waic$waic, 
+            model_trait$waic$waic, 
+            model_trait_Nospatial$waic$waic),
+  LPML_CPO = c(
+    sum(log(model_nt$cpo$cpo), na.rm = TRUE),
+    sum(log(model_trait$cpo$cpo), na.rm = TRUE),
+    sum(log(model_trait_Nospatial$cpo$cpo), na.rm = TRUE)
+  )
 )
 
 comparison <- comparison %>%
   mutate(
     DIC  = formatC(DIC, format = "f", digits = 2),
-    WAIC = formatC(WAIC, format = "f", digits = 2)
+    WAIC = formatC(WAIC, format = "f", digits = 2),
+    LPML_CPO = formatC(LPML_CPO, format = "f", digits = 2)
   )
 
 print(comparison)
@@ -319,6 +329,78 @@ roc_vals <- tibble::tibble(
 print(roc_vals)
 
 
+# Plot calibration checks  -------------------------------------------------
+
+idx <- inla.stack.index(stack, tag = "est")$data
+
+calibration_data <- function(model, model_name, y, idx) {
+  
+  p <- model$summary.fitted.values$mean[idx]
+  
+  tibble(
+    obs = y,
+    pred = p
+  ) %>%
+    mutate(bin = dplyr::ntile(pred, 10)) %>%
+    group_by(bin) %>%
+    summarise(
+      pred_mean = mean(pred),
+      obs_mean  = mean(obs),
+      n = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(model = model_name)
+}
+
+cal_df <- bind_rows(
+  calibration_data(model_nt,               "NoTrait_Spatial",      sim_df$presence, idx),
+  calibration_data(model_trait,            "Trait_Spatial",        sim_df$presence, idx),
+  calibration_data(model_trait_Nospatial,  "Trait_NoSpatial",      sim_df$presence, idx)
+)
+
+# Plot
+cal.plots <-  ggplot(cal_df,
+                     aes(x = pred_mean,
+                         y = obs_mean)) +
+  
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linetype = 2,
+    linewidth = 0.8, color = "gray"
+  ) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  facet_wrap(~ model) +
+  coord_equal() +
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 13), axis.title = element_text(size = 14),
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor = element_line(color = "grey95", linewidth = 0.2),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 12)  
+  ) +
+  labs(
+    x = "Mean predicted probability",
+    y = "Observed prevalence")
+
+cal.plots
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/calplots_multiespeciesReal.jpg",
+  plot = cal.plots,
+  width = 1484,    # ancho en píxeles
+  height = 758,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
+
 # --- 8. Spatial field plots ---------------------------------------------------
 
 projr <- inla.mesh.projector(mesh, dims = c(300, 300))
@@ -342,11 +424,7 @@ df_wt_multiSimu <- expand.grid(
 #No traits
 p_nt_multiSimu <- ggplot(df_nt_multiSimu, aes(x, y, fill = value)) +
   geom_raster() +
-   scale_fill_distiller(
-    palette = "RdBu",
-    direction = -1,
-     name = "Spatial effect"
-   ) +
+  scale_fill_scico(palette = "vik", ,  name = "Spatial effect") +
   labs(
     x = "x",
     y = "y"
@@ -370,11 +448,7 @@ p_nt_multiSimu <- ggplot(df_nt_multiSimu, aes(x, y, fill = value)) +
 #With trait
 p_wt_multiSimu <- ggplot(df_wt_multiSimu, aes(x, y, fill = value)) +
   geom_raster() +
-  scale_fill_distiller(
-    palette = "RdBu",
-    direction = -1,
-    name = "Spatial effect"
-  ) +
+  scale_fill_scico(palette = "vik", ,  name = "Spatial effect") +
   labs(
     x = "x",
     y = "y"
@@ -399,9 +473,19 @@ windows();(p_nt_multiSimu | p_wt_multiSimu)
 combination <- (p_nt_multiSimu | p_wt_multiSimu)
 
 
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/simulationMultiCase_change.jpg",
+  plot = combination,
+  width = 972,    # ancho en píxeles
+  height = 380,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
+
+
 # --- 9. Trait vs slope relationship -------------------------------------------
 
-slopes <- model_trait3$summary.random$species_slope_id %>%
+slopes <- model_trait$summary.random$species_slope_id %>%
   as_tibble() %>%
   rename(
     species_id = ID,
@@ -483,8 +567,7 @@ thermal_slope <- ggplot(slopes_with_trait,
   geom_point(size = 5) +
   geom_vline(xintercept = 0, linetype = "dashed",
              alpha = 0.4, color = "red") +
-  scale_color_viridis_d(option = "turbo",
-                        name = "Trait (cm)") +
+  scale_color_scico(palette = "imola", name = "Mean length (cm)") +
   labs(
     x = "Temperature effect (slope)",
     y = "Species"
@@ -503,4 +586,5 @@ thermal_slope <- ggplot(slopes_with_trait,
     legend.title = element_text(size = 14),
     legend.text  = element_text(size = 14)
   )
+
 thermal_slope 

@@ -32,6 +32,8 @@ world <- map_data("world")
 class(world)
 library(showtext)
 library(sysfonts)
+library(scico)
+library(patchwork)
 
 font_add("Helvetica", 
          regular = "~/Downloads/helvetica-255/Helvetica.ttf")
@@ -41,7 +43,7 @@ showtext_auto()
 
 # --- 2. Load cleaned SDM dataset ----------------------------------------------
 
-sdm_data_multi <-  readRDS("~/SDMs_Traits/data/sdm_multispecies_clean.rds")
+sdm_data_multi <-  readRDS("~/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/data/sdm_multispecies_clean.rds")
 
 # --- 3. Apply data quality filters --------------------------------------------
 # To ensure model robustness and remove artifacts or extreme values, we apply the following filters:
@@ -276,7 +278,7 @@ model <- inla(
   family = "binomial",
   data = inla.stack.data(stack),
   control.predictor = list(A = inla.stack.A(stack), compute = TRUE, link = 1),
-  control.compute = list(dic = TRUE, waic = TRUE)
+  control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE)
 )
 
 model_nt <- inla(
@@ -284,7 +286,7 @@ model_nt <- inla(
   family = "binomial",
   data = inla.stack.data(stack),
   control.predictor = list(A = inla.stack.A(stack), compute = TRUE, link = 1),
-  control.compute = list(dic = TRUE, waic = TRUE)
+  control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE)
 )
 
 model_nsp <- inla(
@@ -292,7 +294,7 @@ model_nsp <- inla(
   family = "binomial",
   data = inla.stack.data(stack),
   control.predictor = list(A = inla.stack.A(stack), compute = TRUE, link = 1),
-  control.compute = list(dic = TRUE, waic = TRUE)
+  control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE)
 )
 
 model_nsp$dic$dic
@@ -302,14 +304,24 @@ model_nsp$waic$waic
 
 comparison <- tibble::tibble(
   Model = c("Spatial_NoTrait", "Spatial", "Model_nsp"),
-  DIC   = c(model_nt$dic$dic,  model$dic$dic, model_nsp$dic$dic),
-  WAIC  = c(model_nt$waic$waic,  model$waic$waic, model_nsp$waic$waic)
+  DIC   = c(model_nt$dic$dic,  
+            model$dic$dic, 
+            model_nsp$dic$dic),
+  WAIC  = c(model_nt$waic$waic,  
+            model$waic$waic, 
+            model_nsp$waic$waic),
+  LPML_CPO = c(
+    sum(log(model_nt$cpo$cpo), na.rm = TRUE),
+    sum(log(model$cpo$cpo), na.rm = TRUE),
+    sum(log(model_nsp$cpo$cpo), na.rm = TRUE)
+  )
 )
 
 comparison <- comparison %>%
   mutate(
     DIC  = formatC(DIC, format = "f", digits = 2),
-    WAIC = formatC(WAIC, format = "f", digits = 2)
+    WAIC = formatC(WAIC, format = "f", digits = 2),
+    LPML_CPO = formatC(LPML_CPO, format = "f", digits = 2)
   )
 
 print(comparison)
@@ -339,6 +351,78 @@ roc_vals <- tibble::tibble(
 
 print(roc_vals)
 
+# Plot calibration checks  -------------------------------------------------
+
+#Index of real observation samples
+idx <- inla.stack.index(stack, "est")$data
+
+# Funtion for calibration
+calibration_data <- function(model, model_name, y) {
+  
+  p <- model$summary.fitted.values[idx, "mean"]
+  
+  tibble(
+    obs = y,
+    pred = p
+  ) %>%
+    mutate(bin = ntile(pred, 10)) %>%
+    group_by(bin) %>%
+    summarise(
+      pred_mean = mean(pred),
+      obs_mean  = mean(obs),
+      n = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(model = model_name)
+}
+
+cal_df <- bind_rows(
+  calibration_data(model_nt,  "Trait-modulated slope (without spatial effect)", sdm_df$presence, idx),
+  calibration_data(model,     "Trait-modulated slope (with spatial effect)",         sdm_df$presence, idx),
+  calibration_data(model_nsp, "Baseline model",      sdm_df$presence, idx)
+)
+
+# Plot
+cal.plots <-  ggplot(cal_df,
+                     aes(x = pred_mean,
+                         y = obs_mean)) +
+  
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linetype = 2,
+    linewidth = 0.8, color = "gray"
+  ) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  facet_wrap(~ model, ncol = 3) +
+  coord_equal() +
+  theme_classic() +
+  theme( 
+    text = element_text(family = "Helvetica"),
+    axis.text = element_text(size = 18), axis.title = element_text(size = 16),
+    axis.line         = element_line(color = "black", linewidth = 0.4),
+    axis.ticks        = element_line(color = "black", linewidth = 0.3),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5), 
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor = element_line(color = "grey95", linewidth = 0.2),
+    strip.background  = element_blank(),                        
+    strip.text        = element_text(face = "bold", size = 18)  
+  ) +
+  labs(
+    x = "Mean predicted probability",
+    y = "Observed prevalence")
+
+cal.plots
+
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/calplots_empirical.jpg",
+  plot = cal.plots,
+  width = 1484,    # ancho en píxeles
+  height = 758,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 # --- 11. Plot spatial fields --------------------------------------------------
 # Create projection grid over mesh
@@ -364,11 +448,7 @@ df_trait_multiReal <- expand.grid(
 #No traits
 spatialfield_nt <- ggplot(df_nt_multiReal, aes(x, y, fill = value)) +
   geom_raster() +
-  scale_fill_distiller(
-    palette = "RdBu",
-    direction = -1,
-    name = "Spatial effect"
-  ) +
+  scale_fill_scico(palette = "vik", ,  name = "Spatial effect") +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "black", fill = "black") + 
   coord_fixed(xlim = c(-12, -1), ylim = c(40, 46)) +
@@ -387,11 +467,7 @@ spatialfield_nt <- ggplot(df_nt_multiReal, aes(x, y, fill = value)) +
 
 spatialfield <- ggplot(df_trait_multiReal, aes(x, y, fill = value)) +
   geom_raster() +
-  scale_fill_distiller(
-    palette = "RdBu",
-    direction = -1,
-    name = "Spatial effect"
-  ) +
+  scale_fill_scico(palette = "vik", ,  name = "Spatial effect") +
   geom_map(data=world, map = world, aes(long, lat, map_id = region),
            color = "black", fill = "black") + 
   coord_fixed(xlim = c(-12, -1), ylim = c(40, 46)) +
@@ -411,6 +487,14 @@ spatialfield <- ggplot(df_trait_multiReal, aes(x, y, fill = value)) +
 
 combination <- (spatialfield_nt | spatialfield)
 
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/multi_realcase.jpg",
+  plot =combination,
+  width = 972,    # ancho en píxeles
+  height = 380,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 # --- 13.Plot: Trait-Modulated Thermal Response across Species with Labels-------------------------------------------------
 
@@ -503,30 +587,23 @@ ggplot(slopes_with_trait,
     legend.text  = element_text(size = 14))
 
 
-library(RColorBrewer)
-
-colors_div <- brewer.pal(n = 8, name = "Spectral")
 
 thermal_slope <- ggplot(slopes_with_trait, 
-       aes(x = mean_slope, 
-           y = Species,
-           color = (mean_length/10))) +
+                        aes(x = mean_slope, 
+                            y = Species,
+                            color = mean_length/10)) +
   geom_errorbar(aes(xmin = lower, xmax = upper),
                 orientation = "y",
                 width = 0,
                 linewidth = 1) +
   geom_point(size = 5) +
   geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.4, color = "red") +
-  #scale_color_paletteer_c("viridis::magma", name = "Mean length (cm)") +
-  scale_color_distiller(
-    palette = "Spectral",
-    name = "Mean length (cm)"
-  ) +
+  
+  scale_color_scico(palette = "imola", name = "Mean length (cm)") +
   labs(
-    x = "Temperature effect (slope)",
+    x = expression("Thermal sensitivity " (theta[j])),
     y = "Species"
   ) +
-  
   theme_classic() +
   theme(
     legend.position = "right",
@@ -539,12 +616,18 @@ thermal_slope <- ggplot(slopes_with_trait,
     axis.title = element_text(size = 14),
     strip.text = element_text(face = "bold", size = 14),
     legend.title = element_text(size = 14),
-    legend.text  = element_text(size = 14))
+    legend.text  = element_text(size = 14)
+  )
 
 thermal_slope
 
-
-
-
+ggsave(
+  filename = "C:/Users/mdolores.riesgo/Documents/LolaR/PhD_MB/PhD_SideProjects/SDMs_Traits/plots/thermal_slope_real.jpg",
+  plot = thermal_slope,
+  width = 859,    # ancho en píxeles
+  height = 523,   # alto en píxeles
+  units = "px",
+  dpi = 72        # dpi estándar para píxeles (72 dpi)
+)
 
 
